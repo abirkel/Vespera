@@ -1,0 +1,25 @@
+# Build artifacts
+*.rpm
+*.tar.gz
+*.log
+
+# Temporary files
+/tmp/
+*.tmp
+*.swp
+*~
+
+# IDE and editor files
+.vscode/
+.idea/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build metadata
+build-metadata.json
+
+# Reference documents (research and analysis)
+.references/
