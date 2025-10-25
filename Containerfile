@@ -168,8 +168,12 @@ RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}'
 COPY --from=maccel-builder /tmp/maccel/target/release/maccel /usr/local/bin/maccel
 RUN chmod +x /usr/local/bin/maccel
 
-# Install udev rules
-COPY --from=maccel-builder /tmp/maccel/99-maccel.rules /etc/udev/rules.d/99-maccel.rules
+# Install udev rules - create them since they may not exist in the repo
+RUN echo '# Maccel udev rules' > /etc/udev/rules.d/99-maccel.rules && \
+    echo '# Allow access to uinput device for maccel' >> /etc/udev/rules.d/99-maccel.rules && \
+    echo 'KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput", GROUP="maccel", MODE="0660"' >> /etc/udev/rules.d/99-maccel.rules && \
+    echo '# Allow access to input event devices' >> /etc/udev/rules.d/99-maccel.rules && \
+    echo 'KERNEL=="event*", SUBSYSTEM=="input", TAG+="uaccess", GROUP="maccel", MODE="0660"' >> /etc/udev/rules.d/99-maccel.rules
 
 # Create module loading configuration
 RUN echo "maccel" > /etc/modules-load.d/maccel.conf
