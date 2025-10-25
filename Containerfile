@@ -7,15 +7,32 @@
 FROM fedora:41 AS maccel-builder
 
 # Install build dependencies
-RUN dnf install -y \
-    git \
-    make \
-    gcc \
-    kernel-devel \
-    kernel-headers \
-    elfutils-libelf-devel \
-    rust \
-    cargo \
+# Note: We need to build for the kernel version that will be in the final Aurora image
+# Query the target Aurora image to get its kernel version
+ARG AURORA_VARIANT=aurora
+ARG GPU_VARIANT=nvidia
+ARG FEDORA_VERSION=41
+
+# Get kernel version from target Aurora image
+RUN dnf install -y skopeo jq && \
+    AURORA_IMAGE="ghcr.io/ublue-os/${AURORA_VARIANT}-${GPU_VARIANT}:${FEDORA_VERSION}" && \
+    echo "Querying kernel version from ${AURORA_IMAGE}..." && \
+    KERNEL_VERSION=$(skopeo inspect docker://${AURORA_IMAGE} | jq -r '.Labels["ostree.linux"] // empty') && \
+    if [ -z "$KERNEL_VERSION" ]; then \
+        echo "Could not determine kernel version from Aurora image, using latest Fedora 41 kernel"; \
+        KERNEL_VERSION="6.17.4-100.fc41"; \
+    fi && \
+    echo "Target kernel version: ${KERNEL_VERSION}" && \
+    echo "${KERNEL_VERSION}" > /tmp/target-kernel-version && \
+    dnf install -y \
+        git \
+        make \
+        gcc \
+        "kernel-devel-${KERNEL_VERSION}" \
+        "kernel-headers-${KERNEL_VERSION}" \
+        elfutils-libelf-devel \
+        rust \
+        cargo \
     && dnf clean all
 
 # Clone maccel repository
@@ -24,9 +41,12 @@ RUN git clone ${MACCEL_REPO} /tmp/maccel
 
 WORKDIR /tmp/maccel
 
-# Build kernel module
+# Build kernel module for the target kernel version
 # The driver is in the driver/ subdirectory
-RUN cd driver && make
+RUN KERNEL_VERSION=$(cat /tmp/target-kernel-version) && \
+    echo "Building maccel module for kernel ${KERNEL_VERSION}..." && \
+    cd driver && \
+    make KVER=${KERNEL_VERSION}
 
 # Build CLI tool (in root directory, not maccel-tui/)
 RUN cargo build --bin maccel --release

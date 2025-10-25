@@ -206,7 +206,8 @@ Vespera is a custom Fedora Atomic image based on Aurora that:
     - Output package verification results to job summary
     - _Requirements: 2.2, 2.3, 2.4, 5.2_
   
-  - [-] 5.4 Test complete workflow
+  - [x] 5.4 Test complete workflow
+
 
 
 
@@ -288,6 +289,42 @@ Vespera is a custom Fedora Atomic image based on Aurora that:
     - Display what each layer adds/removes
     - Update documentation to reference these tools instead of static files
     - _Requirements: 6.2_
+
+- [ ] 8. Migrate maccel kernel module to akmods
+  - [ ] 8.1 Research Universal Blue akmods infrastructure
+    - Study how ublue-os implements akmods for kernel modules
+    - Review existing akmods examples (nvidia, zfs, etc.)
+    - Understand akmods package structure and requirements
+    - Document akmods workflow and integration points
+    - _Requirements: 3.1, 3.2_
+  
+  - [ ] 8.2 Create akmods package for maccel
+    - Create RPM spec file for maccel-kmod
+    - Set up DKMS configuration for automatic rebuilds
+    - Package maccel driver source for akmods
+    - Test akmods package builds correctly
+    - _Requirements: 3.2, 3.3_
+  
+  - [ ] 8.3 Update Containerfile to use akmods
+    - Remove manual kernel module build from builder stage
+    - Install akmods and maccel-kmod package in final image
+    - Configure automatic module rebuild on kernel updates
+    - Remove manual depmod and module installation steps
+    - _Requirements: 3.2, 3.3, 3.4_
+  
+  - [ ] 8.4 Update documentation for akmods approach
+    - Document how akmods handles kernel module building
+    - Explain automatic rebuild process on kernel updates
+    - Update troubleshooting guide for akmods-specific issues
+    - Add notes about first-boot module compilation
+    - _Requirements: 6.3, 6.4_
+  
+  - [ ] 8.5 Test akmods integration
+    - Verify module builds automatically on first boot
+    - Test module rebuilds after kernel updates
+    - Confirm module loads correctly after akmods build
+    - Validate across different kernel versions
+    - _Requirements: 5.2, 5.3_
 
 ## Success Criteria
 
