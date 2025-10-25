@@ -32,212 +32,23 @@ jobs:
       packages: write
     
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y skopeo jq curl
-      
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
+      - name: Delete old staging images
+        uses: snok/container-retention-policy@v3.0.0
         with:
-          registry: ${{ env.IMAGE_REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Set cleanup parameters
-        id: params
-        run: |
-          MAX_AGE_DAYS="${{ github.event.inputs.max_age_days || '7' }}"
-          DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
-          
-          # Calculate cutoff date
-          CUTOFF_DATE=$(date -d "${MAX_AGE_DAYS} days ago" -u +"%Y-%m-%dT%H:%M:%SZ")
-          
-          echo "max_age_days=${MAX_AGE_DAYS}" >> $GITHUB_OUTPUT
-          echo "dry_run=${DRY_RUN}" >> $GITHUB_OUTPUT
-          echo "cutoff_date=${CUTOFF_DATE}" >> $GITHUB_OUTPUT
-          
-          echo "Cleanup parameters:"
-          echo "- Max age: ${MAX_AGE_DAYS} days"
-          echo "- Cutoff date: ${CUTOFF_DATE}"
-          echo "- Dry run: ${DRY_RUN}"
-      
-      - name: List and cleanup staging images
-        run: |
-          MAX_AGE_DAYS="${{ steps.params.outputs.max_age_days }}"
-          DRY_RUN="${{ steps.params.outputs.dry_run }}"
-          CUTOFF_DATE="${{ steps.params.outputs.cutoff_date }}"
-          
-          echo "Scanning for staging images older than ${MAX_AGE_DAYS} days..."
-          
-          # Get list of all tags for the repository
-          TAGS_JSON=$(skopeo list-tags docker://${IMAGE_REGISTRY}/${IMAGE_NAME} 2>/dev/null || echo '{"Tags":[]}')
-          
-          if [ "$(echo "$TAGS_JSON" | jq -r '.Tags | length')" -eq 0 ]; then
-            echo "No images found in registry"
-            exit 0
-          fi
-          
-          # Filter for staging tags
-          STAGING_TAGS=$(echo "$TAGS_JSON" | jq -r '.Tags[]' | grep '^staging-' || echo "")
-          
-          if [ -z "$STAGING_TAGS" ]; then
-            echo "No staging images found"
-            exit 0
-          fi
-          
-          echo "Found staging images:"
-          echo "$STAGING_TAGS"
-          echo ""
-          
-          DELETED_COUNT=0
-          KEPT_COUNT=0
-          TOTAL_SIZE_SAVED=0
-          
-          # Process each staging tag
-          for TAG in $STAGING_TAGS; do
-            echo "Checking staging image: ${TAG}"
-            
-            # Get image metadata
-            IMAGE_INFO=$(skopeo inspect docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:${TAG} 2>/dev/null || echo "{}")
-            
-            if [ "$IMAGE_INFO" = "{}" ]; then
-              echo "  ⚠ Could not inspect image, skipping"
-              continue
-            fi
-            
-            # Extract creation date
-            CREATED=$(echo "$IMAGE_INFO" | jq -r '.Created // empty')
-            
-            if [ -z "$CREATED" ]; then
-              echo "  ⚠ No creation date found, skipping"
-              continue
-            fi
-            
-            # Convert dates to timestamps for comparison
-            CREATED_TS=$(date -d "$CREATED" +%s 2>/dev/null || echo "0")
-            CUTOFF_TS=$(date -d "$CUTOFF_DATE" +%s)
-            
-            if [ "$CREATED_TS" -eq 0 ]; then
-              echo "  ⚠ Invalid creation date format, skipping"
-              continue
-            fi
-            
-            # Get image size
-            SIZE=$(echo "$IMAGE_INFO" | jq -r '.Size // 0')
-            SIZE_MB=$((SIZE / 1024 / 1024))
-            
-            echo "  Created: $CREATED (${SIZE_MB} MB)"
-            
-            # Check if image is older than cutoff
-            if [ "$CREATED_TS" -lt "$CUTOFF_TS" ]; then
-              echo "  🗑️  Image is older than ${MAX_AGE_DAYS} days"
-              
-              if [ "$DRY_RUN" = "true" ]; then
-                echo "  [DRY RUN] Would delete: ${IMAGE_REGISTRY}/${IMAGE_NAME}:${TAG}"
-              else
-                echo "  Deleting: ${IMAGE_REGISTRY}/${IMAGE_NAME}:${TAG}"
-                if skopeo delete docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:${TAG}; then
-                  echo "  ✅ Successfully deleted"
-                  DELETED_COUNT=$((DELETED_COUNT + 1))
-                  TOTAL_SIZE_SAVED=$((TOTAL_SIZE_SAVED + SIZE_MB))
-                else
-                  echo "  ❌ Failed to delete"
-                fi
-              fi
-            else
-              echo "  ✅ Image is recent, keeping"
-              KEPT_COUNT=$((KEPT_COUNT + 1))
-            fi
-            
-            echo ""
-          done
-          
-          # Summary
-          echo "Cleanup Summary:"
-          echo "- Staging images processed: $((DELETED_COUNT + KEPT_COUNT))"
-          echo "- Images deleted: ${DELETED_COUNT}"
-          echo "- Images kept: ${KEPT_COUNT}"
-          echo "- Storage saved: ${TOTAL_SIZE_SAVED} MB"
-          
-          if [ "$DRY_RUN" = "true" ]; then
-            echo ""
-            echo "This was a dry run. No images were actually deleted."
-            echo "Run with dry_run=false to perform actual cleanup."
-          fi
-      
-      - name: Cleanup failed workflow staging images
-        run: |
-          DRY_RUN="${{ steps.params.outputs.dry_run }}"
-          
-          echo "Checking for staging images from failed workflow runs..."
-          
-          # Get list of recent workflow runs
-          FAILED_RUNS=$(gh run list --workflow="build-vespera.yml" --status=failure --status=cancelled --limit=50 --json databaseId,conclusion,createdAt | jq -r '.[] | select(.conclusion == "failure" or .conclusion == "cancelled") | .databaseId')
-          
-          if [ -z "$FAILED_RUNS" ]; then
-            echo "No recent failed workflow runs found"
-            exit 0
-          fi
-          
-          echo "Found failed workflow runs: $(echo "$FAILED_RUNS" | wc -l)"
-          
-          # Get current staging tags
-          TAGS_JSON=$(skopeo list-tags docker://${IMAGE_REGISTRY}/${IMAGE_NAME} 2>/dev/null || echo '{"Tags":[]}')
-          STAGING_TAGS=$(echo "$TAGS_JSON" | jq -r '.Tags[]' | grep '^staging-' || echo "")
-          
-          if [ -z "$STAGING_TAGS" ]; then
-            echo "No staging images found"
-            exit 0
-          fi
-          
-          CLEANED_COUNT=0
-          
-          # Check each staging tag against failed runs
-          for TAG in $STAGING_TAGS; do
-            # Extract run ID from staging tag (format: staging-RUNID-ATTEMPT)
-            RUN_ID=$(echo "$TAG" | sed 's/^staging-\([0-9]*\)-[0-9]*$/\1/')
-            
-            if [ "$RUN_ID" = "$TAG" ]; then
-              # Couldn't extract run ID, skip
-              continue
-            fi
-            
-            # Check if this run ID is in our failed runs list
-            if echo "$FAILED_RUNS" | grep -q "^${RUN_ID}$"; then
-              echo "Found staging image from failed run: ${TAG} (run ${RUN_ID})"
-              
-              if [ "$DRY_RUN" = "true" ]; then
-                echo "  [DRY RUN] Would delete: ${IMAGE_REGISTRY}/${IMAGE_NAME}:${TAG}"
-              else
-                echo "  Deleting: ${IMAGE_REGISTRY}/${IMAGE_NAME}:${TAG}"
-                if skopeo delete docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:${TAG}; then
-                  echo "  ✅ Successfully deleted"
-                  CLEANED_COUNT=$((CLEANED_COUNT + 1))
-                else
-                  echo "  ❌ Failed to delete"
-                fi
-              fi
-            fi
-          done
-          
-          echo "Cleaned up ${CLEANED_COUNT} staging images from failed runs"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          image-names: vespera
+          cut-off: ${{ github.event.inputs.max_age_days || '7' }}d
+          timestamp-to-use: created_at
+          account-type: org
+          org-name: ${{ github.repository_owner }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          filter-tags: staging-*
+          skip-tags: latest,main,develop
+          dry-run: ${{ github.event.inputs.dry_run || false }}
       
       - name: Generate cleanup report
         run: |
-          DRY_RUN="${{ steps.params.outputs.dry_run }}"
-          MAX_AGE_DAYS="${{ steps.params.outputs.max_age_days }}"
-          
-          # Get current registry usage
-          TAGS_JSON=$(skopeo list-tags docker://${IMAGE_REGISTRY}/${IMAGE_NAME} 2>/dev/null || echo '{"Tags":[]}')
-          TOTAL_TAGS=$(echo "$TAGS_JSON" | jq -r '.Tags | length')
-          STAGING_TAGS=$(echo "$TAGS_JSON" | jq -r '.Tags[]' | grep '^staging-' | wc -l || echo "0")
-          PRODUCTION_TAGS=$((TOTAL_TAGS - STAGING_TAGS))
+          DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
+          MAX_AGE_DAYS="${{ github.event.inputs.max_age_days || '7' }}"
           
           cat >> $GITHUB_STEP_SUMMARY << EOF
           # Registry Cleanup Report
@@ -246,14 +57,10 @@ jobs:
           - **Max Age**: ${MAX_AGE_DAYS} days
           - **Mode**: $([ "$DRY_RUN" = "true" ] && echo "Dry Run" || echo "Live Cleanup")
           - **Date**: $(date -u +'%Y-%m-%d %H:%M:%S UTC')
-          
-          ## Current Registry Status
-          - **Total Images**: ${TOTAL_TAGS}
-          - **Production Images**: ${PRODUCTION_TAGS}
-          - **Staging Images**: ${STAGING_TAGS}
+          - **Filter**: staging-* tags only
           
           ## Cleanup Actions
-          See job logs for detailed cleanup actions performed.
+          See job logs above for detailed cleanup actions performed by container-retention-policy.
           
           $([ "$DRY_RUN" = "true" ] && echo "**Note**: This was a dry run. No images were actually deleted." || echo "**Note**: Live cleanup was performed.")
           EOF
