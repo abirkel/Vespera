@@ -38,8 +38,8 @@ jobs:
           image-names: vespera
           cut-off: ${{ github.event.inputs.max_age_days || '7' }}d
           timestamp-to-use: created_at
-          account-type: org
-          org-name: ${{ github.repository_owner }}
+          account-type: user
+          account: ${{ github.repository_owner }}
           token: ${{ secrets.GITHUB_TOKEN }}
           filter-tags: staging-*
           skip-tags: latest,main,develop
