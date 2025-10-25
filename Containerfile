@@ -102,9 +102,11 @@ ARG AURORA_DATE
 FROM ghcr.io/ublue-os/${AURORA_VARIANT}-${GPU_VARIANT}:${AURORA_DATE}
 
 # Image metadata
+ARG IMAGE_REGISTRY=ghcr.io
+ARG IMAGE_NAME
 LABEL org.opencontainers.image.title="Vespera"
 LABEL org.opencontainers.image.description="Custom Fedora Atomic image based on Aurora with maccel integration"
-LABEL org.opencontainers.image.source="https://github.com/YOUR_USERNAME/vespera"
+LABEL org.opencontainers.image.source="https://github.com/${IMAGE_NAME}"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.vendor="Vespera Project"
 

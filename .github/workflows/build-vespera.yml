@@ -244,6 +244,8 @@ jobs:
             --layers \
             --build-arg AURORA_VARIANT=${AURORA_VARIANT} \
             --build-arg GPU_VARIANT=${GPU_VARIANT} \
+            --build-arg IMAGE_REGISTRY=${IMAGE_REGISTRY} \
+            --build-arg IMAGE_NAME=${{ github.repository }} \
             --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_TAG} \
             --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:${BUILD_DATE} \
             --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:latest \
@@ -314,6 +316,8 @@ jobs:
             --layers \
             --build-arg AURORA_VARIANT=${AURORA_VARIANT} \
             --build-arg GPU_VARIANT=${GPU_VARIANT} \
+            --build-arg IMAGE_REGISTRY=${IMAGE_REGISTRY} \
+            --build-arg IMAGE_NAME=${{ github.repository }} \
             --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify \
             --label "org.vespera.build.date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
             --label "org.vespera.aurora.variant=${AURORA_VARIANT}" \
@@ -767,6 +771,8 @@ jobs:
             --layers \
             --build-arg AURORA_VARIANT=${AURORA_VARIANT} \
             --build-arg GPU_VARIANT=${GPU_VARIANT} \
+            --build-arg IMAGE_REGISTRY=${IMAGE_REGISTRY} \
+            --build-arg IMAGE_NAME=${{ github.repository }} \
             --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_TAG} \
             --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:${BUILD_DATE} \
             --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:latest \
