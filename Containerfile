@@ -2,9 +2,24 @@
 # Multi-stage build: Stage 1 builds maccel, Stage 2 customizes Aurora
 
 # =============================================================================
+# Global ARGs (available to all stages)
+# =============================================================================
+# ARG for selecting Aurora variant (aurora or aurora-dx)
+ARG AURORA_VARIANT=aurora
+# ARG for selecting GPU variant (main, nvidia, nvidia-open)
+ARG GPU_VARIANT=nvidia
+ARG FEDORA_VERSION=41
+ARG AURORA_DATE=latest
+
+# =============================================================================
 # Stage 1: Build maccel kernel module and CLI
 # =============================================================================
 FROM fedora:41 AS maccel-builder
+
+# Re-declare ARGs needed in this stage
+ARG AURORA_VARIANT
+ARG GPU_VARIANT
+ARG FEDORA_VERSION
 
 # Install build dependencies
 # Note: We need to build for the kernel version that will be in the final Aurora image
@@ -64,13 +79,11 @@ RUN cargo build --bin maccel --release
 # Stage 2: Customize Aurora and integrate maccel
 # =============================================================================
 
-# ARG for selecting Aurora variant (aurora or aurora-dx)
-ARG AURORA_VARIANT=aurora
-# ARG for selecting GPU variant (main, nvidia, nvidia-open)
-# This should be read from vespera-config.yaml by the build system and passed as --build-arg
-ARG GPU_VARIANT=nvidia
-ARG FEDORA_VERSION=41
-ARG AURORA_DATE=latest
+# Re-declare ARGs for this stage
+ARG AURORA_VARIANT
+ARG GPU_VARIANT
+ARG FEDORA_VERSION
+ARG AURORA_DATE
 
 # Base image from Aurora with GPU variant support
 # The GPU variant will be appended to the Aurora variant name
