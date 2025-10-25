@@ -67,8 +67,8 @@ packages:
   remove_rpm:
     # Note: Some packages may not be present in Aurora or may have dependencies
     # The build will continue even if removal fails
-    # - sunshine  # Game streaming server (remove if you don't stream games)
-    # - openrazer-daemon  # Razer hardware support (remove if no Razer devices)
+    - sunshine  # Game streaming server (remove if you don't stream games)
+    - openrazer-daemon  # Razer hardware support (remove if no Razer devices)
     # - tailscale  # VPN service (remove if using WireGuard or other VPN)
     # - tmux  # Terminal multiplexer (remove if you prefer screen or alternatives)
     # - borgbackup  # Backup tool (remove if using other backup solutions)
@@ -141,7 +141,7 @@ packages:
     # - net.lutris.Lutris  # Game manager for Linux
     
     # Utilities
-    # - org.keepassxc.KeePassXC  # Password manager
+    - org.keepassxc.KeePassXC  # Password manager
     # - com.github.tchx84.Flatseal  # Already included in Aurora
     # - org.videolan.VLC  # Media player (Aurora includes Haruna)
 
