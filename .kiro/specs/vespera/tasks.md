@@ -13,7 +13,12 @@ Vespera is a custom Fedora Atomic image based on Aurora that:
 
 ## Implementation Tasks
 
-- [ ] 1. Create project structure and configuration
+- [x] 1. Create project structure and configuration
+
+
+
+
+
   - Create vespera-config.yaml for package customization
   - Include option to select Aurora variant (aurora or aurora-dx)
   - Default to regular aurora variant
@@ -21,33 +26,57 @@ Vespera is a custom Fedora Atomic image based on Aurora that:
   - Create README.md with project overview
   - _Requirements: 1.1, 1.2, 6.2_
 
-- [ ] 2. Create Containerfile with multi-stage build
-  - [ ] 2.1 Set up base image and metadata
+
+
+
+
+
+- [x] 2. Create Containerfile with multi-stage build
+
+
+
+
+
+
+  - [x] 2.1 Set up base image and metadata
+
+
     - Define ARG variables for base image and versions
     - Read Aurora variant from vespera-config.yaml (aurora or aurora-dx)
+
     - Set up FROM statement using selected Aurora variant
     - Add image labels and metadata
     - _Requirements: 1.1, 1.2_
   
-  - [ ] 2.2 Implement package customization
+
+
+  - [x] 2.2 Implement package customization
+
     - Copy vespera-config.yaml into build
     - Install yq for YAML parsing
+
     - Remove specified RPM packages using rpm-ostree override remove
     - Add specified RPM packages using rpm-ostree install
     - Handle Flatpak removal and installation
+
     - _Requirements: 2.1, 2.2, 2.3, 2.4_
   
-  - [ ] 2.3 Create maccel builder stage
+  - [x] 2.3 Create maccel builder stage
+
     - Create separate FROM fedora:41 AS maccel-builder stage
+
     - Install build dependencies (git, make, gcc, kernel-devel, rust, cargo, dkms)
     - Clone maccel repository
     - Build kernel module using make in driver/ directory
     - Build CLI using cargo build --bin maccel --release
     - _Requirements: 3.1, 3.2, 3.5_
   
-  - [ ] 2.4 Integrate maccel into final image
+  - [x] 2.4 Integrate maccel into final image
+
+
     - Copy kernel module from builder to /usr/lib/modules/${KERNEL}/extra/maccel/
     - Run depmod to update module dependencies
+
     - Copy CLI binary from builder to /usr/local/bin/maccel
     - Install udev rules using make udev_install from builder
     - Create /etc/modules-load.d/maccel.conf for auto-loading
@@ -55,41 +84,61 @@ Vespera is a custom Fedora Atomic image based on Aurora that:
     - Create maccel group with groupadd
     - _Requirements: 3.2, 3.3, 3.4, 3.5_
   
-  - [ ] 2.5 Cleanup and finalization
+
+  - [x] 2.5 Cleanup and finalization
+
+
     - Remove temporary files
     - Run ostree container commit
     - _Requirements: 1.5_
 
-- [ ] 3. Create GitHub Actions workflow for automated builds
-  - [ ] 3.1 Create workflow file structure
+- [x] 3. Create GitHub Actions workflow for automated builds
+
+
+
+
+  - [x] 3.1 Create workflow file structure
+
+
     - Create .github/workflows/build-vespera.yml
     - Set up workflow triggers (schedule, workflow_dispatch, push)
     - Define environment variables and secrets
     - _Requirements: 4.1, 6.1_
   
-  - [ ] 3.2 Implement change detection job
+
+  - [x] 3.2 Implement change detection job
+
     - Create job to check Aurora base image version
     - Create job to check maccel repository for updates
     - Set output variables indicating if build is needed
     - Store version metadata for next comparison
     - _Requirements: 4.2, 4.3, 4.4_
   
-  - [ ] 3.3 Implement build job
+  - [x] 3.3 Implement build job
+
     - Configure job to run conditionally based on change detection
     - Set up container build environment (buildah/podman)
     - Build vespera image using Containerfile
     - Tag image with date and version
     - _Requirements: 4.5, 1.4_
   
-  - [ ] 3.4 Implement publish job
+
+  - [x] 3.4 Implement publish job
+
     - Authenticate to container registry (ghcr.io)
     - Push built image to registry
     - Generate and store build metadata
     - Create job summary with build information
     - _Requirements: 4.6, 4.7_
 
-- [ ] 4. Create documentation
-  - [ ] 4.1 Write comprehensive README
+- [x] 4. Create documentation
+
+
+
+
+  - [x] 4.1 Write comprehensive README
+
+
     - Document project purpose (Vespera = evening, Aurora = dawn)
     - Explain what Aurora provides as base
     - Document package customization process
@@ -98,29 +147,42 @@ Vespera is a custom Fedora Atomic image based on Aurora that:
     - Include usage examples
     - _Requirements: 6.3_
   
-  - [ ] 4.2 Document configuration
+
+
+  - [x] 4.2 Document configuration
     - Create example vespera-config.yaml with comments
     - Document all configuration options
     - Provide examples for common customizations
     - Reference AURORA-CUSTOMIZATIONS.md for what's already included
+
+
     - _Requirements: 6.2, 6.3_
   
-  - [ ] 4.3 Document build process
+  - [x] 4.3 Document build process
     - Explain multi-stage build approach
     - Document maccel integration details
     - Provide troubleshooting guide
     - Document GitHub Actions workflow
     - _Requirements: 6.3, 6.4_
 
-- [ ] 5. Testing and validation
-  - [ ] 5.1 Validate Containerfile syntax locally
+- [-] 5. Testing and validation
+
+
+  - [x] 5.1 Validate Containerfile syntax locally
+
+
     - Review Containerfile for syntax errors
     - Verify all paths and commands are correct
     - Check multi-stage build structure
     - Validate ARG and ENV variables
     - _Requirements: 5.1_
   
-  - [ ] 5.2 Add verification job to GitHub Actions workflow
+  - [x] 5.2 Add verification job to GitHub Actions workflow
+
+
+
+
+
     - Create verification job that runs after successful build
     - Use podman/docker to run verification commands in built image
     - Check for maccel kernel module in /usr/lib/modules/
@@ -131,7 +193,12 @@ Vespera is a custom Fedora Atomic image based on Aurora that:
     - Output all verification results to job summary
     - _Requirements: 3.3, 3.4, 3.5, 5.2, 5.3_
   
-  - [ ] 5.3 Add package verification to GitHub Actions
+  - [x] 5.3 Add package verification to GitHub Actions
+
+
+
+
+
     - Run commands to list installed RPM packages
     - Verify removed packages are not present
     - Verify added packages are installed
@@ -139,7 +206,10 @@ Vespera is a custom Fedora Atomic image based on Aurora that:
     - Output package verification results to job summary
     - _Requirements: 2.2, 2.3, 2.4, 5.2_
   
-  - [ ] 5.4 Test complete workflow
+  - [-] 5.4 Test complete workflow
+
+
+
     - Push to GitHub repository
     - Trigger workflow manually via workflow_dispatch
     - Monitor build logs in GitHub Actions
@@ -186,6 +256,38 @@ Vespera is a custom Fedora Atomic image based on Aurora that:
     - Monitor first automated build
     - Confirm change detection prevents unnecessary builds
     - _Requirements: 4.1, 4.5_
+
+- [x] 7. Create package inspection tools
+
+
+
+
+  - [x] 7.1 Create tools/check-aurora-packages.sh script
+
+
+    - Fetch current packages.json from Aurora GitHub repo (ublue-os/aurora)
+    - Parse RPM packages for both aurora and aurora-dx variants  
+    - Fetch flatpaks/system-flatpaks.list and system-flatpaks-dx.list
+    - Display current Aurora package lists in readable format
+    - _Requirements: 6.2_
+  
+  - [x] 7.2 Create tools/check-kinoite-packages.sh script
+
+
+    - Fetch packages.json from ublue-os/main repo (Aurora's upstream)
+    - Parse RPM packages that ublue-os/main adds to base Fedora Kinoite
+    - Show what ublue-os/main customizes from upstream Fedora
+    - Note: ublue-os/main is based on quay.io/fedora-ostree-desktops/kinoite
+    - _Requirements: 6.2_
+  
+  - [x] 7.3 Create tools/compare-packages.sh script
+
+
+    - Compare Aurora vs ublue-os/main to show Aurora's additions
+    - Show the full chain: Fedora Kinoite → ublue-os/main → Aurora → Vespera
+    - Display what each layer adds/removes
+    - Update documentation to reference these tools instead of static files
+    - _Requirements: 6.2_
 
 ## Success Criteria
 

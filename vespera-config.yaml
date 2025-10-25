@@ -1,0 +1,170 @@
+# Vespera Configuration
+# Custom Fedora Atomic image based on Aurora
+#
+# This file defines how Vespera customizes the Aurora base image.
+# Aurora already includes many packages - use ./tools/check-aurora-packages.sh to see current list
+# for a complete list of what's included by default.
+
+# Base image configuration
+base:
+  # Aurora variant to use as base (aurora or aurora-dx)
+  # 
+  # aurora: Standard Aurora with KDE desktop and essential tools
+  #   - Includes: KDE Plasma, Firefox (Flatpak), backup tools, fonts, hardware support
+  #   - Best for: General desktop use, gaming, multimedia
+  #
+  # aurora-dx: Aurora Developer Experience with additional development tools
+  #   - Includes everything in 'aurora' PLUS:
+  #   - Containers: Docker, Podman, Incus, LXC
+  #   - Virtualization: QEMU, libvirt, virt-manager
+  #   - Development: VS Code, Android tools, Cockpit
+  #   - Debugging: bpftrace, sysprof, trace-cmd
+  #   - Best for: Software development, DevOps, system administration
+  variant: "aurora"
+  
+  # GPU variant to use for Aurora base image
+  #
+  # Aurora provides different GPU variants optimized for different hardware:
+  #
+  # main: Intel/AMD graphics with open source drivers
+  #   - Uses mesa drivers for Intel integrated graphics and AMD GPUs
+  #   - Best for: Intel laptops, AMD desktop systems, older hardware
+  #   - Most compatible but may have limited performance for gaming
+  #
+  # nvidia: NVIDIA graphics with proprietary drivers (DEFAULT)
+  #   - Uses NVIDIA's proprietary drivers for best performance
+  #   - Best for: NVIDIA desktop GPUs, gaming, CUDA workloads
+  #   - Recommended for most NVIDIA users due to better performance
+  #
+  # nvidia-open: NVIDIA graphics with open source drivers
+  #   - Uses NVIDIA's open source kernel modules (nouveau alternative)
+  #   - Best for: Users who prefer open source drivers, newer NVIDIA GPUs
+  #   - May have some limitations compared to proprietary drivers
+  #
+  # Valid values: main, nvidia, nvidia-open
+  gpu_variant: "nvidia"
+  
+  # Registry where Aurora images are hosted
+  registry: "ghcr.io/ublue-os"
+
+# Package customization
+# 
+# Aurora already includes many packages. Use ./tools/check-aurora-packages.sh to see current list
+# for a complete list of what Aurora provides out of the box.
+#
+# Common Aurora packages you might want to keep:
+#   RPM: git, fish, zsh, starship, fastfetch, tmux, tailscale, wireguard-tools
+#   Flatpak: Firefox, Flatseal, Warehouse, Gwenview, Haruna, Okular, Thunderbird
+#
+# Strategy: Only remove what you don't need, only add what's missing
+packages:
+  # RPM packages to remove from Aurora base
+  #
+  # Remove packages you don't use to reduce image size and update overhead.
+  # Be careful with dependencies - removing some packages may affect others.
+  #
+  # Common candidates for removal:
+  remove_rpm:
+    - sunshine  # Game streaming server (remove if you don't stream games)
+    - openrazer-daemon  # Razer hardware support (remove if no Razer devices)
+    # - tailscale  # VPN service (remove if using WireGuard or other VPN)
+    # - tmux  # Terminal multiplexer (remove if you prefer screen or alternatives)
+    # - borgbackup  # Backup tool (remove if using other backup solutions)
+    # - restic  # Backup tool (remove if using other backup solutions)
+    # - rclone  # Cloud sync tool (remove if not syncing to cloud storage)
+    # - virtualbox-guest-additions  # VirtualBox support (remove if not using VirtualBox)
+  
+  # Flatpak applications to remove from Aurora base
+  #
+  # Aurora includes many KDE and productivity apps as Flatpaks.
+  # Remove the ones you don't use to save disk space.
+  #
+  # Common candidates for removal:
+  remove_flatpak:
+    - org.mozilla.Thunderbird  # Email client (remove if you don't use email clients)
+    # - org.kde.kontact  # KDE PIM suite (remove if using web-based email)
+    # - org.kde.kweather  # Weather app (remove if you check weather elsewhere)
+    # - io.github.pwr_solaar.solaar  # Logitech device manager (remove if no Logitech devices)
+    # - org.gnome.DejaDup  # Backup tool (remove if using other backup solutions)
+    # - com.borgbase.Vorta  # Borg backup GUI (remove if not using Borg)
+    # - org.deskflow.deskflow  # KVM software (remove if not sharing keyboard/mouse)
+    # - org.kde.kcalc  # Calculator (remove if you prefer other calculators)
+    # - org.kde.kclock  # Clock/timer (remove if you don't need it)
+  
+  # RPM packages to add (beyond what Aurora provides)
+  #
+  # Add packages that aren't included in Aurora but that you need.
+  # Aurora already includes: git, fish, zsh, starship, fastfetch, vim, make, and many more
+  # Use ./tools/check-aurora-packages.sh to see what's already included.
+  #
+  # Common additions:
+  add_rpm:
+    # - neovim  # Modern Vim alternative (if you prefer it over vim)
+    - htop  # Interactive process viewer (Aurora DX has iotop, but htop is more popular)
+    # - ncdu  # Disk usage analyzer with ncurses interface
+    # - bat  # Cat clone with syntax highlighting
+    # - ripgrep  # Fast grep alternative
+    # - fd-find  # Fast find alternative
+    # - btop  # Modern resource monitor
+    # - eza  # Modern ls alternative (formerly exa)
+  
+  # Flatpak applications to add (beyond what Aurora provides)
+  #
+  # Add Flatpak apps that aren't included in Aurora.
+  # Aurora already includes: Firefox, Flatseal, Warehouse, Gwenview, Haruna, Okular, and more
+  # Use ./tools/check-aurora-packages.sh to see what's already included.
+  #
+  # Common additions:
+  add_flatpak:
+    # Communication & Social
+    # - com.spotify.Client  # Music streaming
+    # - com.discordapp.Discord  # Voice/text chat for gaming and communities
+    # - com.slack.Slack  # Team communication
+    # - us.zoom.Zoom  # Video conferencing
+    
+    # Creative & Productivity
+    # - org.gimp.GIMP  # Image editor
+    # - org.inkscape.Inkscape  # Vector graphics editor
+    # - org.blender.Blender  # 3D creation suite
+    # - org.libreoffice.LibreOffice  # Office suite
+    # - md.obsidian.Obsidian  # Note-taking and knowledge base
+    
+    # Development (if not using aurora-dx)
+    # - com.visualstudio.code  # VS Code (already in aurora-dx)
+    # - io.podman_desktop.PodmanDesktop  # Podman GUI
+    
+    # Gaming
+    # - com.valvesoftware.Steam  # Gaming platform
+    # - com.heroicgameslauncher.hgl  # Epic Games and GOG launcher
+    # - net.lutris.Lutris  # Game manager for Linux
+    
+    # Utilities
+    # - org.keepassxc.KeePassXC  # Password manager
+    # - com.github.tchx84.Flatseal  # Already included in Aurora
+    # - org.videolan.VLC  # Media player (Aurora includes Haruna)
+
+# Maccel mouse acceleration driver configuration
+#
+# Maccel provides customizable mouse acceleration similar to Windows and macOS.
+# It consists of a kernel module (driver) and a CLI/TUI tool for configuration.
+#
+# The integration is automatic - you don't need to configure anything here.
+# After installation, use 'maccel tui' to configure acceleration curves.
+maccel:
+  repository: "https://github.com/Gnarus-G/maccel"
+  enabled: true
+  # Module will be built and integrated during image creation
+  # CLI binary will be available at /usr/local/bin/maccel
+  # Kernel module will auto-load at boot via /etc/modules-load.d/
+  # Udev rules will be configured for device access
+  # Users can be added to 'maccel' group for non-root access
+
+# Build configuration
+#
+# These settings control how the image is built and published.
+# You typically don't need to change these unless you're forking the project.
+build:
+  registry: "ghcr.io"
+  image_name: "vespera"
+  # Image will be tagged with date (e.g., 20241024) and 'latest'
+  # Full image name: ghcr.io/YOUR_USERNAME/vespera:latest

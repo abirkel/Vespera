@@ -1,25 +1,54 @@
 # Build artifacts
-*.rpm
+*.img
+*.iso
+*.qcow2
+*.raw
+
+# Container build artifacts
+*.tar
 *.tar.gz
+*.tar.xz
+
+# Temporary build files
+build/
+tmp/
+.tmp/
+
+# Logs
 *.log
+logs/
 
-# Temporary files
-/tmp/
-*.tmp
-*.swp
-*~
-
-# IDE and editor files
-.vscode/
-.idea/
-*.iml
-
-# OS files
+# OS-specific files
 .DS_Store
 Thumbs.db
 
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Secrets and credentials
+.env
+secrets/
+*.key
+*.pem
+
+# Cache directories
+.cache/
+__pycache__/
+
 # Build metadata
-build-metadata.json
+.build-metadata/
+version-cache/
 
 # Reference documents (research and analysis)
 .references/
+
+# Windows development scripts (local tools)
+*.ps1
+
+# Validation reports (generated locally)
+*validation-report.md
+*-report.md

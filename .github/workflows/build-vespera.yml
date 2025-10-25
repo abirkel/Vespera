@@ -1,0 +1,902 @@
+name: Build Vespera Image
+
+on:
+  # Daily build at 2 AM UTC
+  schedule:
+    - cron: '0 2 * * *'
+  
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force build even if no changes detected'
+        required: false
+        type: boolean
+        default: false
+  
+  # Trigger on push to main branch
+  push:
+    branches:
+      - main
+    paths:
+      - 'Containerfile'
+      - 'vespera-config.yaml'
+      - '.github/workflows/build-vespera.yml'
+
+env:
+  IMAGE_REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/vespera
+  AURORA_BASE_IMAGE: ghcr.io/ublue-os/aurora
+  MACCEL_REPO: https://github.com/Gnarus-G/maccel
+
+jobs:
+  detect-changes:
+    name: Detect Upstream Changes
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.decision.outputs.should_build }}
+      aurora_version: ${{ steps.check-aurora.outputs.version }}
+      aurora_variant: ${{ steps.check-aurora.outputs.aurora_variant }}
+      gpu_variant: ${{ steps.check-aurora.outputs.gpu_variant }}
+      maccel_commit: ${{ steps.check-maccel.outputs.commit }}
+      build_date: ${{ steps.date.outputs.date }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Get current date
+        id: date
+        run: echo "date=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
+      
+      - name: Check Aurora base image version
+        id: check-aurora
+        run: |
+          # Get Aurora variant from config
+          AURORA_VARIANT=$(yq eval '.base.variant // "aurora"' vespera-config.yaml)
+          
+          # Get GPU variant from config
+          GPU_VARIANT=$(yq eval '.base.gpu_variant // "nvidia"' vespera-config.yaml)
+          
+          # Validate GPU variant
+          if [[ ! "$GPU_VARIANT" =~ ^(main|nvidia|nvidia-open)$ ]]; then
+            echo "::error::Invalid GPU variant: $GPU_VARIANT. Must be one of: main, nvidia, nvidia-open"
+            exit 1
+          fi
+          
+          echo "Aurora variant: ${AURORA_VARIANT}"
+          echo "GPU variant: ${GPU_VARIANT}"
+          
+          # Construct full image name with GPU variant
+          # Format: aurora-{gpu_variant} or aurora-dx-{gpu_variant}
+          if [ "${AURORA_VARIANT}" = "aurora" ]; then
+            FULL_IMAGE="${AURORA_BASE_IMAGE}-${GPU_VARIANT}"
+          else
+            # For aurora-dx, format is aurora-dx-{gpu_variant}
+            FULL_IMAGE="${AURORA_BASE_IMAGE}-dx-${GPU_VARIANT}"
+          fi
+          
+          echo "Full image name: ${FULL_IMAGE}"
+          
+          # Get latest Aurora image digest
+          AURORA_DIGEST=$(skopeo inspect docker://${FULL_IMAGE}:latest | jq -r '.Digest')
+          echo "version=${AURORA_DIGEST}" >> $GITHUB_OUTPUT
+          echo "gpu_variant=${GPU_VARIANT}" >> $GITHUB_OUTPUT
+          echo "aurora_variant=${AURORA_VARIANT}" >> $GITHUB_OUTPUT
+          echo "Aurora digest: ${AURORA_DIGEST}"
+          
+          # Store for comparison
+          echo "${AURORA_DIGEST}" > aurora-version.txt
+          echo "${GPU_VARIANT}" > gpu-variant.txt
+          echo "${AURORA_VARIANT}" > aurora-variant.txt
+      
+      - name: Check maccel repository for updates
+        id: check-maccel
+        run: |
+          # Get latest commit hash from maccel repo
+          MACCEL_COMMIT=$(git ls-remote ${MACCEL_REPO} HEAD | awk '{print $1}')
+          echo "commit=${MACCEL_COMMIT}" >> $GITHUB_OUTPUT
+          echo "Maccel commit: ${MACCEL_COMMIT}"
+          
+          # Store for comparison
+          echo "${MACCEL_COMMIT}" > maccel-commit.txt
+      
+      - name: Download previous build metadata
+        id: previous-metadata
+        continue-on-error: true
+        run: |
+          # Try to get previous build metadata from registry
+          skopeo inspect docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:latest | jq -r '.Labels' > previous-metadata.json || echo "{}" > previous-metadata.json
+          
+          PREV_AURORA=$(jq -r '.["org.vespera.aurora.digest"] // ""' previous-metadata.json)
+          PREV_MACCEL=$(jq -r '.["org.vespera.maccel.commit"] // ""' previous-metadata.json)
+          PREV_GPU_VARIANT=$(jq -r '.["org.vespera.gpu.variant"] // ""' previous-metadata.json)
+          
+          echo "Previous Aurora: ${PREV_AURORA}"
+          echo "Previous Maccel: ${PREV_MACCEL}"
+          echo "Previous GPU Variant: ${PREV_GPU_VARIANT}"
+          
+          echo "prev_aurora=${PREV_AURORA}" >> $GITHUB_OUTPUT
+          echo "prev_maccel=${PREV_MACCEL}" >> $GITHUB_OUTPUT
+          echo "prev_gpu_variant=${PREV_GPU_VARIANT}" >> $GITHUB_OUTPUT
+      
+      - name: Decide if build is needed
+        id: decision
+        run: |
+          FORCE_BUILD="${{ github.event.inputs.force_build }}"
+          CURRENT_AURORA=$(cat aurora-version.txt)
+          CURRENT_MACCEL=$(cat maccel-commit.txt)
+          CURRENT_GPU_VARIANT=$(cat gpu-variant.txt)
+          PREV_AURORA="${{ steps.previous-metadata.outputs.prev_aurora }}"
+          PREV_MACCEL="${{ steps.previous-metadata.outputs.prev_maccel }}"
+          PREV_GPU_VARIANT="${{ steps.previous-metadata.outputs.prev_gpu_variant }}"
+          
+          SHOULD_BUILD="false"
+          
+          # Force build if requested
+          if [ "${FORCE_BUILD}" = "true" ]; then
+            echo "Force build requested"
+            SHOULD_BUILD="true"
+          fi
+          
+          # Build if triggered by push to main
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "Build triggered by push to main"
+            SHOULD_BUILD="true"
+          fi
+          
+          # Build if Aurora version changed
+          if [ "${CURRENT_AURORA}" != "${PREV_AURORA}" ]; then
+            echo "Aurora version changed: ${PREV_AURORA} -> ${CURRENT_AURORA}"
+            SHOULD_BUILD="true"
+          fi
+          
+          # Build if maccel commit changed
+          if [ "${CURRENT_MACCEL}" != "${PREV_MACCEL}" ]; then
+            echo "Maccel commit changed: ${PREV_MACCEL} -> ${CURRENT_MACCEL}"
+            SHOULD_BUILD="true"
+          fi
+          
+          # Build if GPU variant changed
+          if [ "${CURRENT_GPU_VARIANT}" != "${PREV_GPU_VARIANT}" ]; then
+            echo "GPU variant changed: ${PREV_GPU_VARIANT} -> ${CURRENT_GPU_VARIANT}"
+            SHOULD_BUILD="true"
+          fi
+          
+          # Build if no previous metadata exists
+          if [ -z "${PREV_AURORA}" ] || [ -z "${PREV_MACCEL}" ]; then
+            echo "No previous build metadata found"
+            SHOULD_BUILD="true"
+          fi
+          
+          echo "should_build=${SHOULD_BUILD}" >> $GITHUB_OUTPUT
+          echo "Build decision: ${SHOULD_BUILD}"
+      
+      - name: Upload version metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: version-metadata
+          path: |
+            aurora-version.txt
+            aurora-variant.txt
+            gpu-variant.txt
+            maccel-commit.txt
+
+  build:
+    name: Build Vespera Image
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.should_build == 'true'
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Download version metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: version-metadata
+      
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y buildah podman skopeo jq yq
+      
+      - name: Set up build variables
+        id: vars
+        run: |
+          BUILD_DATE="${{ needs.detect-changes.outputs.build_date }}"
+          AURORA_VERSION="${{ needs.detect-changes.outputs.aurora_version }}"
+          MACCEL_COMMIT="${{ needs.detect-changes.outputs.maccel_commit }}"
+          GPU_VARIANT="${{ needs.detect-changes.outputs.gpu_variant }}"
+          
+          # Create short versions for tags
+          AURORA_SHORT=$(echo ${AURORA_VERSION} | cut -c1-12)
+          MACCEL_SHORT=$(echo ${MACCEL_COMMIT} | cut -c1-7)
+          
+          # Create GPU-specific tag
+          GPU_TAG="${BUILD_DATE}-${GPU_VARIANT}"
+          
+          echo "build_date=${BUILD_DATE}" >> $GITHUB_OUTPUT
+          echo "aurora_short=${AURORA_SHORT}" >> $GITHUB_OUTPUT
+          echo "maccel_short=${MACCEL_SHORT}" >> $GITHUB_OUTPUT
+          echo "gpu_tag=${GPU_TAG}" >> $GITHUB_OUTPUT
+      
+      - name: Build Vespera image
+        id: build
+        run: |
+          BUILD_DATE="${{ steps.vars.outputs.build_date }}"
+          GPU_TAG="${{ steps.vars.outputs.gpu_tag }}"
+          AURORA_VARIANT="${{ needs.detect-changes.outputs.aurora_variant }}"
+          GPU_VARIANT="${{ needs.detect-changes.outputs.gpu_variant }}"
+          
+          echo "Building with Aurora variant: ${AURORA_VARIANT}"
+          echo "Building with GPU variant: ${GPU_VARIANT}"
+          
+          # Build the image with GPU variant
+          # Tags: latest, date-based, and GPU-specific
+          buildah bud \
+            --format docker \
+            --layers \
+            --build-arg AURORA_VARIANT=${AURORA_VARIANT} \
+            --build-arg GPU_VARIANT=${GPU_VARIANT} \
+            --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_TAG} \
+            --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:${BUILD_DATE} \
+            --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:latest \
+            --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_VARIANT} \
+            --label "org.vespera.build.date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+            --label "org.vespera.aurora.variant=${AURORA_VARIANT}" \
+            --label "org.vespera.gpu.variant=${GPU_VARIANT}" \
+            --label "org.vespera.aurora.digest=${{ needs.detect-changes.outputs.aurora_version }}" \
+            --label "org.vespera.maccel.commit=${{ needs.detect-changes.outputs.maccel_commit }}" \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            .
+          
+          echo "Image built successfully"
+          
+          # Get image ID
+          IMAGE_ID=$(buildah images --format '{{.ID}}' ${IMAGE_REGISTRY}/${IMAGE_NAME}:latest | head -n1)
+          echo "image_id=${IMAGE_ID}" >> $GITHUB_OUTPUT
+      
+      - name: Test image
+        run: |
+          echo "Running basic image validation..."
+          buildah images ${IMAGE_REGISTRY}/${IMAGE_NAME}:latest
+          
+          # Inspect the image
+          buildah inspect ${IMAGE_REGISTRY}/${IMAGE_NAME}:latest > image-inspect.json
+          
+          echo "Image size:"
+          jq -r '.OCIv1.config.Size' image-inspect.json || echo "Size info not available"
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-metadata
+          path: |
+            image-inspect.json
+            aurora-version.txt
+            aurora-variant.txt
+            gpu-variant.txt
+            maccel-commit.txt
+
+  verify:
+    name: Verify Vespera Image
+    runs-on: ubuntu-latest
+    needs: [detect-changes, build]
+    if: needs.detect-changes.outputs.should_build == 'true'
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y buildah podman jq
+      
+      - name: Rebuild image for verification
+        run: |
+          BUILD_DATE="${{ needs.detect-changes.outputs.build_date }}"
+          AURORA_VARIANT="${{ needs.detect-changes.outputs.aurora_variant }}"
+          GPU_VARIANT="${{ needs.detect-changes.outputs.gpu_variant }}"
+          
+          # Rebuild the image for verification
+          buildah bud \
+            --format docker \
+            --layers \
+            --build-arg AURORA_VARIANT=${AURORA_VARIANT} \
+            --build-arg GPU_VARIANT=${GPU_VARIANT} \
+            --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify \
+            --label "org.vespera.build.date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+            --label "org.vespera.aurora.variant=${AURORA_VARIANT}" \
+            --label "org.vespera.gpu.variant=${GPU_VARIANT}" \
+            --label "org.vespera.aurora.digest=${{ needs.detect-changes.outputs.aurora_version }}" \
+            --label "org.vespera.maccel.commit=${{ needs.detect-changes.outputs.maccel_commit }}" \
+            .
+      
+      - name: Verify GPU variant configuration
+        id: verify-gpu-variant
+        run: |
+          echo "Verifying GPU variant configuration..."
+          
+          EXPECTED_GPU_VARIANT="${{ needs.detect-changes.outputs.gpu_variant }}"
+          AURORA_VARIANT="${{ needs.detect-changes.outputs.aurora_variant }}"
+          
+          # Construct expected base image name
+          if [ "${AURORA_VARIANT}" = "aurora" ]; then
+            EXPECTED_BASE_IMAGE="${AURORA_BASE_IMAGE}-${EXPECTED_GPU_VARIANT}"
+          else
+            EXPECTED_BASE_IMAGE="${AURORA_BASE_IMAGE}-dx-${EXPECTED_GPU_VARIANT}"
+          fi
+          
+          echo "Expected GPU variant: ${EXPECTED_GPU_VARIANT}"
+          echo "Expected base image: ${EXPECTED_BASE_IMAGE}"
+          
+          # Inspect the built image to verify labels
+          CONTAINER=$(buildah from ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify)
+          
+          # Check image labels
+          IMAGE_INSPECT=$(buildah inspect ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify)
+          ACTUAL_GPU_VARIANT=$(echo "$IMAGE_INSPECT" | jq -r '.OCIv1.config.Labels["org.vespera.gpu.variant"] // ""')
+          ACTUAL_AURORA_VARIANT=$(echo "$IMAGE_INSPECT" | jq -r '.OCIv1.config.Labels["org.vespera.aurora.variant"] // ""')
+          
+          echo "Actual GPU variant from labels: ${ACTUAL_GPU_VARIANT}"
+          echo "Actual Aurora variant from labels: ${ACTUAL_AURORA_VARIANT}"
+          
+          GPU_VARIANT_OK="false"
+          
+          # Verify GPU variant matches
+          if [ "${ACTUAL_GPU_VARIANT}" = "${EXPECTED_GPU_VARIANT}" ]; then
+            echo "✓ GPU variant label matches configuration: ${EXPECTED_GPU_VARIANT}"
+            GPU_VARIANT_OK="true"
+          else
+            echo "⚠ GPU variant mismatch! Expected: ${EXPECTED_GPU_VARIANT}, Got: ${ACTUAL_GPU_VARIANT}"
+          fi
+          
+          # Verify Aurora variant matches
+          if [ "${ACTUAL_AURORA_VARIANT}" = "${AURORA_VARIANT}" ]; then
+            echo "✓ Aurora variant label matches configuration: ${AURORA_VARIANT}"
+          else
+            echo "⚠ Aurora variant mismatch! Expected: ${AURORA_VARIANT}, Got: ${ACTUAL_AURORA_VARIANT}"
+            GPU_VARIANT_OK="false"
+          fi
+          
+          # Check that the base image used is correct by examining the image history
+          # The FROM statement should reference the correct GPU variant
+          echo "Checking base image in build history..."
+          BASE_IMAGE_CHECK=$(buildah run $CONTAINER rpm-ostree status --json | jq -r '.deployments[0].origin // ""' || echo "")
+          
+          if [ -n "$BASE_IMAGE_CHECK" ]; then
+            echo "Base image origin: ${BASE_IMAGE_CHECK}"
+            
+            # Check if the origin contains the GPU variant
+            if echo "$BASE_IMAGE_CHECK" | grep -q "${EXPECTED_GPU_VARIANT}"; then
+              echo "✓ Base image origin contains GPU variant: ${EXPECTED_GPU_VARIANT}"
+            else
+              echo "⚠ Base image origin does not contain expected GPU variant"
+              echo "   This may be normal if the image was rebased"
+            fi
+          else
+            echo "ℹ Could not determine base image origin from rpm-ostree"
+          fi
+          
+          buildah rm $CONTAINER
+          
+          echo "gpu_variant_ok=$GPU_VARIANT_OK" >> $GITHUB_OUTPUT
+          echo "expected_gpu_variant=$EXPECTED_GPU_VARIANT" >> $GITHUB_OUTPUT
+          echo "actual_gpu_variant=$ACTUAL_GPU_VARIANT" >> $GITHUB_OUTPUT
+      
+      - name: Verify maccel kernel module
+        id: verify-module
+        run: |
+          echo "Checking for maccel kernel module..."
+          
+          # Run container and check for kernel module files
+          CONTAINER=$(buildah from ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify)
+          
+          # Find kernel version directory
+          KERNEL_DIRS=$(buildah run $CONTAINER find /usr/lib/modules -maxdepth 1 -type d -name "*.*.*" 2>/dev/null || echo "")
+          
+          MODULE_FOUND="false"
+          MODULE_PATH=""
+          
+          if [ -n "$KERNEL_DIRS" ]; then
+            for KDIR in $KERNEL_DIRS; do
+              echo "Checking kernel directory: $KDIR"
+              
+              # Check for maccel module in extra directory
+              if buildah run $CONTAINER test -f "$KDIR/extra/maccel/maccel.ko.xz" 2>/dev/null; then
+                MODULE_FOUND="true"
+                MODULE_PATH="$KDIR/extra/maccel/maccel.ko.xz"
+                echo "✓ Found maccel module at: $MODULE_PATH"
+                break
+              elif buildah run $CONTAINER test -f "$KDIR/extra/maccel/maccel.ko" 2>/dev/null; then
+                MODULE_FOUND="true"
+                MODULE_PATH="$KDIR/extra/maccel/maccel.ko"
+                echo "✓ Found maccel module at: $MODULE_PATH"
+                break
+              fi
+            done
+          fi
+          
+          buildah rm $CONTAINER
+          
+          if [ "$MODULE_FOUND" = "true" ]; then
+            echo "module_found=true" >> $GITHUB_OUTPUT
+            echo "module_path=$MODULE_PATH" >> $GITHUB_OUTPUT
+          else
+            echo "module_found=false" >> $GITHUB_OUTPUT
+            echo "⚠ Maccel kernel module not found in /usr/lib/modules/*/extra/maccel/"
+          fi
+      
+      - name: Verify maccel CLI binary
+        id: verify-cli
+        run: |
+          echo "Checking for maccel CLI binary..."
+          
+          CONTAINER=$(buildah from ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify)
+          
+          if buildah run $CONTAINER test -f /usr/local/bin/maccel; then
+            echo "✓ Found maccel CLI at /usr/local/bin/maccel"
+            
+            # Check if executable
+            if buildah run $CONTAINER test -x /usr/local/bin/maccel; then
+              echo "✓ maccel CLI is executable"
+              echo "cli_found=true" >> $GITHUB_OUTPUT
+            else
+              echo "⚠ maccel CLI exists but is not executable"
+              echo "cli_found=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "⚠ maccel CLI not found at /usr/local/bin/maccel"
+            echo "cli_found=false" >> $GITHUB_OUTPUT
+          fi
+          
+          buildah rm $CONTAINER
+      
+      - name: Verify udev rules
+        id: verify-udev
+        run: |
+          echo "Checking for maccel udev rules..."
+          
+          CONTAINER=$(buildah from ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify)
+          
+          UDEV_FOUND="false"
+          UDEV_FILES=""
+          
+          # Check for udev rules files
+          if buildah run $CONTAINER test -d /etc/udev/rules.d; then
+            UDEV_FILES=$(buildah run $CONTAINER find /etc/udev/rules.d -name "*maccel*" 2>/dev/null || echo "")
+            
+            if [ -n "$UDEV_FILES" ]; then
+              echo "✓ Found maccel udev rules:"
+              echo "$UDEV_FILES"
+              UDEV_FOUND="true"
+            else
+              echo "⚠ No maccel udev rules found in /etc/udev/rules.d/"
+            fi
+          else
+            echo "⚠ /etc/udev/rules.d directory not found"
+          fi
+          
+          buildah rm $CONTAINER
+          
+          echo "udev_found=$UDEV_FOUND" >> $GITHUB_OUTPUT
+      
+      - name: Verify maccel group
+        id: verify-group
+        run: |
+          echo "Checking for maccel group..."
+          
+          CONTAINER=$(buildah from ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify)
+          
+          if buildah run $CONTAINER getent group maccel > /dev/null 2>&1; then
+            GROUP_INFO=$(buildah run $CONTAINER getent group maccel)
+            echo "✓ maccel group exists: $GROUP_INFO"
+            echo "group_found=true" >> $GITHUB_OUTPUT
+          else
+            echo "⚠ maccel group not found"
+            echo "group_found=false" >> $GITHUB_OUTPUT
+          fi
+          
+          buildah rm $CONTAINER
+      
+      - name: Verify module loading configuration
+        id: verify-modload
+        run: |
+          echo "Checking for module loading configuration..."
+          
+          CONTAINER=$(buildah from ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify)
+          
+          MODLOAD_FOUND="false"
+          
+          # Check for modules-load.d configuration
+          if buildah run $CONTAINER test -f /etc/modules-load.d/maccel.conf; then
+            echo "✓ Found /etc/modules-load.d/maccel.conf"
+            CONTENT=$(buildah run $CONTAINER cat /etc/modules-load.d/maccel.conf)
+            echo "Content: $CONTENT"
+            MODLOAD_FOUND="true"
+          else
+            echo "⚠ /etc/modules-load.d/maccel.conf not found"
+          fi
+          
+          # Check for modprobe.d configuration
+          if buildah run $CONTAINER test -f /etc/modprobe.d/maccel.conf; then
+            echo "✓ Found /etc/modprobe.d/maccel.conf"
+            CONTENT=$(buildah run $CONTAINER cat /etc/modprobe.d/maccel.conf)
+            echo "Content: $CONTENT"
+          else
+            echo "ℹ /etc/modprobe.d/maccel.conf not found (optional)"
+          fi
+          
+          buildah rm $CONTAINER
+          
+          echo "modload_found=$MODLOAD_FOUND" >> $GITHUB_OUTPUT
+      
+      - name: Verify RPM package customizations
+        id: verify-rpm
+        run: |
+          echo "Verifying RPM package customizations..."
+          
+          CONTAINER=$(buildah from ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify)
+          
+          # Get list of packages to remove from config
+          REMOVE_RPMS=$(yq eval '.packages.remove_rpm[]' vespera-config.yaml 2>/dev/null || echo "")
+          
+          # Get list of packages to add from config
+          ADD_RPMS=$(yq eval '.packages.add_rpm[]' vespera-config.yaml 2>/dev/null || echo "")
+          
+          REMOVED_OK="true"
+          ADDED_OK="true"
+          REMOVED_DETAILS=""
+          ADDED_DETAILS=""
+          
+          # Verify removed packages are not present
+          if [ -n "$REMOVE_RPMS" ]; then
+            echo "Checking removed RPM packages..."
+            for pkg in $REMOVE_RPMS; do
+              if buildah run $CONTAINER rpm -q "$pkg" > /dev/null 2>&1; then
+                echo "⚠ Package $pkg should be removed but is still present"
+                REMOVED_OK="false"
+                REMOVED_DETAILS="${REMOVED_DETAILS}${pkg} (still present), "
+              else
+                echo "✓ Package $pkg successfully removed"
+              fi
+            done
+          else
+            echo "ℹ No RPM packages configured for removal"
+          fi
+          
+          # Verify added packages are present
+          if [ -n "$ADD_RPMS" ]; then
+            echo "Checking added RPM packages..."
+            for pkg in $ADD_RPMS; do
+              if buildah run $CONTAINER rpm -q "$pkg" > /dev/null 2>&1; then
+                echo "✓ Package $pkg successfully installed"
+              else
+                echo "⚠ Package $pkg should be installed but is missing"
+                ADDED_OK="false"
+                ADDED_DETAILS="${ADDED_DETAILS}${pkg} (missing), "
+              fi
+            done
+          else
+            echo "ℹ No RPM packages configured for addition"
+          fi
+          
+          buildah rm $CONTAINER
+          
+          echo "removed_ok=$REMOVED_OK" >> $GITHUB_OUTPUT
+          echo "added_ok=$ADDED_OK" >> $GITHUB_OUTPUT
+          echo "removed_details=${REMOVED_DETAILS}" >> $GITHUB_OUTPUT
+          echo "added_details=${ADDED_DETAILS}" >> $GITHUB_OUTPUT
+      
+      - name: Verify Flatpak customizations
+        id: verify-flatpak
+        run: |
+          echo "Verifying Flatpak customizations..."
+          
+          CONTAINER=$(buildah from ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify)
+          
+          # Get list of Flatpaks to remove from config
+          REMOVE_FLATPAKS=$(yq eval '.packages.remove_flatpak[]' vespera-config.yaml 2>/dev/null || echo "")
+          
+          # Get list of Flatpaks to add from config
+          ADD_FLATPAKS=$(yq eval '.packages.add_flatpak[]' vespera-config.yaml 2>/dev/null || echo "")
+          
+          REMOVED_OK="true"
+          ADDED_OK="true"
+          REMOVED_DETAILS=""
+          ADDED_DETAILS=""
+          
+          # Verify removed Flatpaks are not present
+          if [ -n "$REMOVE_FLATPAKS" ]; then
+            echo "Checking removed Flatpak applications..."
+            for app in $REMOVE_FLATPAKS; do
+              # Check if Flatpak is in the system installation
+              if buildah run $CONTAINER flatpak list --system --app --columns=application 2>/dev/null | grep -q "^${app}$"; then
+                echo "⚠ Flatpak $app should be removed but is still present"
+                REMOVED_OK="false"
+                REMOVED_DETAILS="${REMOVED_DETAILS}${app} (still present), "
+              else
+                echo "✓ Flatpak $app successfully removed"
+              fi
+            done
+          else
+            echo "ℹ No Flatpak applications configured for removal"
+          fi
+          
+          # Verify added Flatpaks are present
+          if [ -n "$ADD_FLATPAKS" ]; then
+            echo "Checking added Flatpak applications..."
+            for app in $ADD_FLATPAKS; do
+              # Check if Flatpak is in the system installation
+              if buildah run $CONTAINER flatpak list --system --app --columns=application 2>/dev/null | grep -q "^${app}$"; then
+                echo "✓ Flatpak $app successfully installed"
+              else
+                echo "⚠ Flatpak $app should be installed but is missing"
+                ADDED_OK="false"
+                ADDED_DETAILS="${ADDED_DETAILS}${app} (missing), "
+              fi
+            done
+          else
+            echo "ℹ No Flatpak applications configured for addition"
+          fi
+          
+          buildah rm $CONTAINER
+          
+          echo "removed_ok=$REMOVED_OK" >> $GITHUB_OUTPUT
+          echo "added_ok=$ADDED_OK" >> $GITHUB_OUTPUT
+          echo "removed_details=${REMOVED_DETAILS}" >> $GITHUB_OUTPUT
+          echo "added_details=${ADDED_DETAILS}" >> $GITHUB_OUTPUT
+      
+      - name: Generate verification summary
+        run: |
+          MODULE_FOUND="${{ steps.verify-module.outputs.module_found }}"
+          MODULE_PATH="${{ steps.verify-module.outputs.module_path }}"
+          CLI_FOUND="${{ steps.verify-cli.outputs.cli_found }}"
+          UDEV_FOUND="${{ steps.verify-udev.outputs.udev_found }}"
+          GROUP_FOUND="${{ steps.verify-group.outputs.group_found }}"
+          MODLOAD_FOUND="${{ steps.verify-modload.outputs.modload_found }}"
+          RPM_REMOVED_OK="${{ steps.verify-rpm.outputs.removed_ok }}"
+          RPM_ADDED_OK="${{ steps.verify-rpm.outputs.added_ok }}"
+          RPM_REMOVED_DETAILS="${{ steps.verify-rpm.outputs.removed_details }}"
+          RPM_ADDED_DETAILS="${{ steps.verify-rpm.outputs.added_details }}"
+          FLATPAK_REMOVED_OK="${{ steps.verify-flatpak.outputs.removed_ok }}"
+          FLATPAK_ADDED_OK="${{ steps.verify-flatpak.outputs.added_ok }}"
+          FLATPAK_REMOVED_DETAILS="${{ steps.verify-flatpak.outputs.removed_details }}"
+          FLATPAK_ADDED_DETAILS="${{ steps.verify-flatpak.outputs.added_details }}"
+          GPU_VARIANT_OK="${{ steps.verify-gpu-variant.outputs.gpu_variant_ok }}"
+          EXPECTED_GPU_VARIANT="${{ steps.verify-gpu-variant.outputs.expected_gpu_variant }}"
+          ACTUAL_GPU_VARIANT="${{ steps.verify-gpu-variant.outputs.actual_gpu_variant }}"
+          
+          # Determine overall status
+          ALL_PASSED="true"
+          if [ "$MODULE_FOUND" != "true" ] || [ "$CLI_FOUND" != "true" ] || [ "$UDEV_FOUND" != "true" ] || [ "$GROUP_FOUND" != "true" ] || [ "$MODLOAD_FOUND" != "true" ]; then
+            ALL_PASSED="false"
+          fi
+          if [ "$RPM_REMOVED_OK" != "true" ] || [ "$RPM_ADDED_OK" != "true" ] || [ "$FLATPAK_REMOVED_OK" != "true" ] || [ "$FLATPAK_ADDED_OK" != "true" ]; then
+            ALL_PASSED="false"
+          fi
+          if [ "$GPU_VARIANT_OK" != "true" ]; then
+            ALL_PASSED="false"
+          fi
+          
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          # Vespera Image Verification Results
+          
+          ## Configuration Verification
+          
+          | Component | Status | Details |
+          |-----------|--------|---------|
+          | GPU Variant | $([ "$GPU_VARIANT_OK" = "true" ] && echo "✅ Pass" || echo "❌ Fail") | $([ "$GPU_VARIANT_OK" = "true" ] && echo "Expected: \`${EXPECTED_GPU_VARIANT}\`, Actual: \`${ACTUAL_GPU_VARIANT}\`" || echo "Mismatch! Expected: \`${EXPECTED_GPU_VARIANT}\`, Got: \`${ACTUAL_GPU_VARIANT}\`") |
+          
+          ## Maccel Integration Verification
+          
+          | Component | Status | Details |
+          |-----------|--------|---------|
+          | Kernel Module | $([ "$MODULE_FOUND" = "true" ] && echo "✅ Pass" || echo "❌ Fail") | $([ "$MODULE_FOUND" = "true" ] && echo "\`$MODULE_PATH\`" || echo "Not found in /usr/lib/modules/*/extra/maccel/") |
+          | CLI Binary | $([ "$CLI_FOUND" = "true" ] && echo "✅ Pass" || echo "❌ Fail") | $([ "$CLI_FOUND" = "true" ] && echo "\`/usr/local/bin/maccel\`" || echo "Not found or not executable") |
+          | Udev Rules | $([ "$UDEV_FOUND" = "true" ] && echo "✅ Pass" || echo "❌ Fail") | $([ "$UDEV_FOUND" = "true" ] && echo "Found in \`/etc/udev/rules.d/\`" || echo "Not found") |
+          | Maccel Group | $([ "$GROUP_FOUND" = "true" ] && echo "✅ Pass" || echo "❌ Fail") | $([ "$GROUP_FOUND" = "true" ] && echo "Group exists" || echo "Group not found") |
+          | Module Loading Config | $([ "$MODLOAD_FOUND" = "true" ] && echo "✅ Pass" || echo "❌ Fail") | $([ "$MODLOAD_FOUND" = "true" ] && echo "\`/etc/modules-load.d/maccel.conf\`" || echo "Not found") |
+          
+          ## Package Customization Verification
+          
+          | Category | Status | Details |
+          |----------|--------|---------|
+          | RPM Packages Removed | $([ "$RPM_REMOVED_OK" = "true" ] && echo "✅ Pass" || echo "❌ Fail") | $([ "$RPM_REMOVED_OK" = "true" ] && echo "All specified packages removed" || echo "${RPM_REMOVED_DETAILS}") |
+          | RPM Packages Added | $([ "$RPM_ADDED_OK" = "true" ] && echo "✅ Pass" || echo "❌ Fail") | $([ "$RPM_ADDED_OK" = "true" ] && echo "All specified packages installed" || echo "${RPM_ADDED_DETAILS}") |
+          | Flatpak Apps Removed | $([ "$FLATPAK_REMOVED_OK" = "true" ] && echo "✅ Pass" || echo "❌ Fail") | $([ "$FLATPAK_REMOVED_OK" = "true" ] && echo "All specified apps removed" || echo "${FLATPAK_REMOVED_DETAILS}") |
+          | Flatpak Apps Added | $([ "$FLATPAK_ADDED_OK" = "true" ] && echo "✅ Pass" || echo "❌ Fail") | $([ "$FLATPAK_ADDED_OK" = "true" ] && echo "All specified apps installed" || echo "${FLATPAK_ADDED_DETAILS}") |
+          
+          ## Overall Status
+          $([ "$ALL_PASSED" = "true" ] && echo "✅ **All verification checks passed**" || echo "⚠️ **Some verification checks failed** - Review the details above")
+          
+          EOF
+          
+          # Exit with error if verification failed
+          if [ "$ALL_PASSED" != "true" ]; then
+            echo "::error::Verification failed - some components are missing or package customizations failed"
+            exit 1
+          fi
+
+  publish:
+    name: Publish Vespera Image
+    runs-on: ubuntu-latest
+    needs: [detect-changes, build, verify]
+    if: needs.detect-changes.outputs.should_build == 'true'
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Download build metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: build-metadata
+      
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y buildah podman skopeo jq
+      
+      - name: Rebuild image for push
+        run: |
+          BUILD_DATE="${{ needs.detect-changes.outputs.build_date }}"
+          AURORA_VARIANT="${{ needs.detect-changes.outputs.aurora_variant }}"
+          GPU_VARIANT="${{ needs.detect-changes.outputs.gpu_variant }}"
+          
+          # Create GPU-specific tag
+          GPU_TAG="${BUILD_DATE}-${GPU_VARIANT}"
+          
+          # Rebuild the image (necessary since build artifacts don't persist between jobs)
+          # Tags: latest, date-based, and GPU-specific
+          buildah bud \
+            --format docker \
+            --layers \
+            --build-arg AURORA_VARIANT=${AURORA_VARIANT} \
+            --build-arg GPU_VARIANT=${GPU_VARIANT} \
+            --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_TAG} \
+            --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:${BUILD_DATE} \
+            --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:latest \
+            --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_VARIANT} \
+            --label "org.vespera.build.date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+            --label "org.vespera.aurora.variant=${AURORA_VARIANT}" \
+            --label "org.vespera.gpu.variant=${GPU_VARIANT}" \
+            --label "org.vespera.aurora.digest=${{ needs.detect-changes.outputs.aurora_version }}" \
+            --label "org.vespera.maccel.commit=${{ needs.detect-changes.outputs.maccel_commit }}" \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            .
+      
+      - name: Log in to GitHub Container Registry
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | buildah login -u ${{ github.actor }} --password-stdin ${IMAGE_REGISTRY}
+      
+      - name: Push image to registry
+        id: push
+        run: |
+          BUILD_DATE="${{ needs.detect-changes.outputs.build_date }}"
+          GPU_VARIANT="${{ needs.detect-changes.outputs.gpu_variant }}"
+          GPU_TAG="${BUILD_DATE}-${GPU_VARIANT}"
+          
+          # Push all tags
+          buildah push ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_TAG}
+          buildah push ${IMAGE_REGISTRY}/${IMAGE_NAME}:${BUILD_DATE}
+          buildah push ${IMAGE_REGISTRY}/${IMAGE_NAME}:latest
+          buildah push ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_VARIANT}
+          
+          echo "Images pushed successfully"
+          echo "- ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_TAG}"
+          echo "- ${IMAGE_REGISTRY}/${IMAGE_NAME}:${BUILD_DATE}"
+          echo "- ${IMAGE_REGISTRY}/${IMAGE_NAME}:latest"
+          echo "- ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_VARIANT}"
+          
+          # Get image digest
+          DIGEST=$(skopeo inspect docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:latest | jq -r '.Digest')
+          echo "digest=${DIGEST}" >> $GITHUB_OUTPUT
+      
+      - name: Generate build summary
+        run: |
+          BUILD_DATE="${{ needs.detect-changes.outputs.build_date }}"
+          AURORA_VERSION="${{ needs.detect-changes.outputs.aurora_version }}"
+          AURORA_VARIANT="${{ needs.detect-changes.outputs.aurora_variant }}"
+          GPU_VARIANT="${{ needs.detect-changes.outputs.gpu_variant }}"
+          MACCEL_COMMIT="${{ needs.detect-changes.outputs.maccel_commit }}"
+          IMAGE_DIGEST="${{ steps.push.outputs.digest }}"
+          GPU_TAG="${BUILD_DATE}-${GPU_VARIANT}"
+          
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          # Vespera Build Summary
+          
+          ## Build Information
+          - **Build Date**: ${BUILD_DATE}
+          - **Image**: \`${IMAGE_REGISTRY}/${IMAGE_NAME}\`
+          - **Tags**: \`${GPU_TAG}\`, \`${BUILD_DATE}\`, \`${GPU_VARIANT}\`, \`latest\`
+          - **Digest**: \`${IMAGE_DIGEST}\`
+          
+          ## Configuration
+          - **Aurora Variant**: \`${AURORA_VARIANT}\`
+          - **GPU Variant**: \`${GPU_VARIANT}\`
+          
+          ## Upstream Versions
+          - **Aurora Base**: \`${AURORA_VERSION}\`
+          - **Maccel Commit**: \`${MACCEL_COMMIT}\`
+          
+          ## Pull Commands
+          \`\`\`bash
+          # Pull latest build for this GPU variant
+          podman pull ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_TAG}
+          
+          # Or pull by GPU variant (always gets latest for that variant)
+          podman pull ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_VARIANT}
+          
+          # Or pull latest (may be different GPU variant)
+          podman pull ${IMAGE_REGISTRY}/${IMAGE_NAME}:latest
+          \`\`\`
+          
+          ## Rebase Commands
+          \`\`\`bash
+          # Rebase to specific build
+          rpm-ostree rebase ostree-unverified-registry:${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_TAG}
+          
+          # Or rebase to GPU variant (always gets latest for that variant)
+          rpm-ostree rebase ostree-unverified-registry:${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_VARIANT}
+          \`\`\`
+          EOF
+      
+      - name: Store build metadata
+        run: |
+          BUILD_DATE="${{ needs.detect-changes.outputs.build_date }}"
+          AURORA_VERSION="${{ needs.detect-changes.outputs.aurora_version }}"
+          AURORA_VARIANT="${{ needs.detect-changes.outputs.aurora_variant }}"
+          GPU_VARIANT="${{ needs.detect-changes.outputs.gpu_variant }}"
+          MACCEL_COMMIT="${{ needs.detect-changes.outputs.maccel_commit }}"
+          IMAGE_DIGEST="${{ steps.push.outputs.digest }}"
+          
+          # Create metadata JSON
+          cat > build-metadata.json << EOF
+          {
+            "build_id": "${BUILD_DATE}-${GITHUB_RUN_NUMBER}",
+            "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
+            "base_image": {
+              "name": "${AURORA_BASE_IMAGE}",
+              "variant": "${AURORA_VARIANT}",
+              "gpu_variant": "${GPU_VARIANT}",
+              "digest": "${AURORA_VERSION}"
+            },
+            "maccel": {
+              "repository": "${MACCEL_REPO}",
+              "commit": "${MACCEL_COMMIT}"
+            },
+            "image": {
+              "registry": "${IMAGE_REGISTRY}",
+              "name": "${IMAGE_NAME}",
+              "tag": "${BUILD_DATE}",
+              "digest": "${IMAGE_DIGEST}"
+            },
+            "github": {
+              "repository": "${{ github.repository }}",
+              "run_id": "${{ github.run_id }}",
+              "sha": "${{ github.sha }}"
+            }
+          }
+          EOF
+          
+          cat build-metadata.json
+      
+      - name: Upload final metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-build-metadata
+          path: build-metadata.json
