@@ -52,3 +52,6 @@ version-cache/
 # Validation reports (generated locally)
 *validation-report.md
 *-report.md
+
+# Kiro IDE files
+.kiro/
