@@ -29,21 +29,21 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
+      packages: write  # CRITICAL: Required to delete packages
     
     steps:
       - name: Delete old staging images
-        uses: snok/container-retention-policy@v3.0.0
+        uses: snok/container-retention-policy@v2
         with:
           image-names: vespera
-          cut-off: ${{ github.event.inputs.max_age_days || '7' }}d
-          timestamp-to-use: created_at
-          account-type: user
-          account: ${{ github.repository_owner }}
+          cut-off: ${{ github.event.inputs.max_age_days || '7' }} days ago UTC
+          keep-at-least: 1  # Keep at least 1 image regardless of age
+          untagged-only: false  # Delete tagged images (staging tags)
+          skip-tags: latest,nvidia,main,master  # Never delete these production tags
+          account-type: personal  # Use 'personal' for personal repos
           token: ${{ secrets.GITHUB_TOKEN }}
-          filter-tags: staging-*
-          skip-tags: latest,main,develop
           dry-run: ${{ github.event.inputs.dry_run || false }}
+          filter-tags: staging-*  # Only target staging tags
       
       - name: Generate cleanup report
         run: |
