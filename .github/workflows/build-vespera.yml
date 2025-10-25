@@ -183,14 +183,18 @@ jobs:
             gpu-variant.txt
             maccel-commit.txt
 
-  build:
-    name: Build Vespera Image
+  build-and-stage:
+    name: Build and Stage Image
     runs-on: ubuntu-latest
     needs: detect-changes
     if: needs.detect-changes.outputs.should_build == 'true'
     permissions:
       contents: read
       packages: write
+    outputs:
+      staging_tag: ${{ steps.build.outputs.staging_tag }}
+      image_digest: ${{ steps.build.outputs.image_digest }}
+      gpu_tag: ${{ steps.vars.outputs.gpu_tag }}
     
     steps:
       - name: Checkout repository
@@ -206,6 +210,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y buildah podman skopeo jq yq
       
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.IMAGE_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
       - name: Set up build variables
         id: vars
         run: |
@@ -218,27 +229,32 @@ jobs:
           AURORA_SHORT=$(echo ${AURORA_VERSION} | cut -c1-12)
           MACCEL_SHORT=$(echo ${MACCEL_COMMIT} | cut -c1-7)
           
-          # Create GPU-specific tag
+          # Create GPU-specific tag and unique staging tag
           GPU_TAG="${BUILD_DATE}-${GPU_VARIANT}"
+          STAGING_TAG="staging-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           
           echo "build_date=${BUILD_DATE}" >> $GITHUB_OUTPUT
           echo "aurora_short=${AURORA_SHORT}" >> $GITHUB_OUTPUT
           echo "maccel_short=${MACCEL_SHORT}" >> $GITHUB_OUTPUT
           echo "gpu_tag=${GPU_TAG}" >> $GITHUB_OUTPUT
+          echo "staging_tag=${STAGING_TAG}" >> $GITHUB_OUTPUT
       
-      - name: Build Vespera image
+      - name: Build and push staging image
         id: build
         run: |
           BUILD_DATE="${{ steps.vars.outputs.build_date }}"
           GPU_TAG="${{ steps.vars.outputs.gpu_tag }}"
+          STAGING_TAG="${{ steps.vars.outputs.staging_tag }}"
           AURORA_VARIANT="${{ needs.detect-changes.outputs.aurora_variant }}"
           GPU_VARIANT="${{ needs.detect-changes.outputs.gpu_variant }}"
           
-          echo "Building with Aurora variant: ${AURORA_VARIANT}"
-          echo "Building with GPU variant: ${GPU_VARIANT}"
+          echo "Building Vespera image..."
+          echo "- Aurora variant: ${AURORA_VARIANT}"
+          echo "- GPU variant: ${GPU_VARIANT}"
+          echo "- Build date: ${BUILD_DATE}"
+          echo "- Staging tag: ${STAGING_TAG}"
           
-          # Build the image with GPU variant
-          # Tags: latest, date-based, and GPU-specific
+          # Build the image
           buildah bud \
             --format docker \
             --layers \
@@ -246,10 +262,7 @@ jobs:
             --build-arg GPU_VARIANT=${GPU_VARIANT} \
             --build-arg IMAGE_REGISTRY=${IMAGE_REGISTRY} \
             --build-arg IMAGE_NAME=${{ github.repository }} \
-            --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_TAG} \
-            --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:${BUILD_DATE} \
-            --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:latest \
-            --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_VARIANT} \
+            --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:${STAGING_TAG} \
             --label "org.vespera.build.date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
             --label "org.vespera.aurora.variant=${AURORA_VARIANT}" \
             --label "org.vespera.gpu.variant=${GPU_VARIANT}" \
@@ -261,70 +274,72 @@ jobs:
           
           echo "Image built successfully"
           
-          # Get image ID
-          IMAGE_ID=$(buildah images --format '{{.ID}}' ${IMAGE_REGISTRY}/${IMAGE_NAME}:latest | head -n1)
-          echo "image_id=${IMAGE_ID}" >> $GITHUB_OUTPUT
-      
-      - name: Test image
-        run: |
-          echo "Running basic image validation..."
-          buildah images ${IMAGE_REGISTRY}/${IMAGE_NAME}:latest
+          # Push staging image to registry
+          echo "Pushing staging image to registry..."
+          buildah push ${IMAGE_REGISTRY}/${IMAGE_NAME}:${STAGING_TAG}
           
-          # Inspect the image
-          buildah inspect ${IMAGE_REGISTRY}/${IMAGE_NAME}:latest > image-inspect.json
+          # Get image digest
+          DIGEST=$(skopeo inspect docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:${STAGING_TAG} | jq -r '.Digest')
           
-          echo "Image size:"
-          jq -r '.OCIv1.config.Size' image-inspect.json || echo "Size info not available"
+          echo "staging_tag=${STAGING_TAG}" >> $GITHUB_OUTPUT
+          echo "image_digest=${DIGEST}" >> $GITHUB_OUTPUT
+          
+          echo "Staging image pushed successfully:"
+          echo "- Tag: ${STAGING_TAG}"
+          echo "- Digest: ${DIGEST}"
       
-      - name: Upload build artifacts
+      - name: Upload build metadata
         uses: actions/upload-artifact@v4
         with:
           name: build-metadata
           path: |
-            image-inspect.json
             aurora-version.txt
             aurora-variant.txt
             gpu-variant.txt
             maccel-commit.txt
 
-  verify:
-    name: Verify Vespera Image
+  verify-and-publish:
+    name: Verify and Publish Image
     runs-on: ubuntu-latest
-    needs: [detect-changes, build]
+    needs: [detect-changes, build-and-stage]
     if: needs.detect-changes.outputs.should_build == 'true'
     permissions:
       contents: read
+      packages: write
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
       
+      - name: Download build metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: build-metadata
+      
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y buildah podman jq
+          sudo apt-get install -y buildah podman skopeo jq yq
       
-      - name: Rebuild image for verification
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.IMAGE_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Pull staging image for verification
         run: |
-          BUILD_DATE="${{ needs.detect-changes.outputs.build_date }}"
-          AURORA_VARIANT="${{ needs.detect-changes.outputs.aurora_variant }}"
-          GPU_VARIANT="${{ needs.detect-changes.outputs.gpu_variant }}"
+          STAGING_TAG="${{ needs.build-and-stage.outputs.staging_tag }}"
           
-          # Rebuild the image for verification
-          buildah bud \
-            --format docker \
-            --layers \
-            --build-arg AURORA_VARIANT=${AURORA_VARIANT} \
-            --build-arg GPU_VARIANT=${GPU_VARIANT} \
-            --build-arg IMAGE_REGISTRY=${IMAGE_REGISTRY} \
-            --build-arg IMAGE_NAME=${{ github.repository }} \
-            --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify \
-            --label "org.vespera.build.date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-            --label "org.vespera.aurora.variant=${AURORA_VARIANT}" \
-            --label "org.vespera.gpu.variant=${GPU_VARIANT}" \
-            --label "org.vespera.aurora.digest=${{ needs.detect-changes.outputs.aurora_version }}" \
-            --label "org.vespera.maccel.commit=${{ needs.detect-changes.outputs.maccel_commit }}" \
-            .
+          echo "Pulling staging image for verification..."
+          echo "- Staging tag: ${STAGING_TAG}"
+          
+          # Pull the staging image
+          buildah pull ${IMAGE_REGISTRY}/${IMAGE_NAME}:${STAGING_TAG}
+          
+          # Tag it locally for verification
+          buildah tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:${STAGING_TAG} ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify
       
       - name: Verify GPU variant configuration
         id: verify-gpu-variant
@@ -731,79 +746,33 @@ jobs:
             echo "::error::Verification failed - some components are missing or package customizations failed"
             exit 1
           fi
-
-  publish:
-    name: Publish Vespera Image
-    runs-on: ubuntu-latest
-    needs: [detect-changes, build, verify]
-    if: needs.detect-changes.outputs.should_build == 'true'
-    permissions:
-      contents: read
-      packages: write
-    
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
       
-      - name: Download build metadata
-        uses: actions/download-artifact@v4
-        with:
-          name: build-metadata
-      
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y buildah podman skopeo jq
-      
-      - name: Rebuild image for push
-        run: |
-          BUILD_DATE="${{ needs.detect-changes.outputs.build_date }}"
-          AURORA_VARIANT="${{ needs.detect-changes.outputs.aurora_variant }}"
-          GPU_VARIANT="${{ needs.detect-changes.outputs.gpu_variant }}"
-          
-          # Create GPU-specific tag
-          GPU_TAG="${BUILD_DATE}-${GPU_VARIANT}"
-          
-          # Rebuild the image (necessary since build artifacts don't persist between jobs)
-          # Tags: latest, date-based, and GPU-specific
-          buildah bud \
-            --format docker \
-            --layers \
-            --build-arg AURORA_VARIANT=${AURORA_VARIANT} \
-            --build-arg GPU_VARIANT=${GPU_VARIANT} \
-            --build-arg IMAGE_REGISTRY=${IMAGE_REGISTRY} \
-            --build-arg IMAGE_NAME=${{ github.repository }} \
-            --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_TAG} \
-            --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:${BUILD_DATE} \
-            --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:latest \
-            --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_VARIANT} \
-            --label "org.vespera.build.date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-            --label "org.vespera.aurora.variant=${AURORA_VARIANT}" \
-            --label "org.vespera.gpu.variant=${GPU_VARIANT}" \
-            --label "org.vespera.aurora.digest=${{ needs.detect-changes.outputs.aurora_version }}" \
-            --label "org.vespera.maccel.commit=${{ needs.detect-changes.outputs.maccel_commit }}" \
-            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
-            --label "org.opencontainers.image.revision=${{ github.sha }}" \
-            .
-      
-      - name: Log in to GitHub Container Registry
-        run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | buildah login -u ${{ github.actor }} --password-stdin ${IMAGE_REGISTRY}
-      
-      - name: Push image to registry
+      - name: Tag and push verified image
         id: push
         run: |
           BUILD_DATE="${{ needs.detect-changes.outputs.build_date }}"
           GPU_VARIANT="${{ needs.detect-changes.outputs.gpu_variant }}"
-          GPU_TAG="${BUILD_DATE}-${GPU_VARIANT}"
+          STAGING_TAG="${{ needs.build-and-stage.outputs.staging_tag }}"
+          GPU_TAG="${{ needs.build-and-stage.outputs.gpu_tag }}"
           
-          # Push all tags
+          echo "Verification passed! Publishing image..."
+          echo "- Build date: ${BUILD_DATE}"
+          echo "- GPU variant: ${GPU_VARIANT}"
+          echo "- GPU tag: ${GPU_TAG}"
+          
+          # Tag the verified staging image with production tags
+          buildah tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_TAG}
+          buildah tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify ${IMAGE_REGISTRY}/${IMAGE_NAME}:${BUILD_DATE}
+          buildah tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify ${IMAGE_REGISTRY}/${IMAGE_NAME}:latest
+          buildah tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_VARIANT}
+          
+          # Push all production tags
           buildah push ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_TAG}
           buildah push ${IMAGE_REGISTRY}/${IMAGE_NAME}:${BUILD_DATE}
           buildah push ${IMAGE_REGISTRY}/${IMAGE_NAME}:latest
           buildah push ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_VARIANT}
           
-          echo "Images pushed successfully"
+          echo "Production images pushed successfully:"
           echo "- ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_TAG}"
           echo "- ${IMAGE_REGISTRY}/${IMAGE_NAME}:${BUILD_DATE}"
           echo "- ${IMAGE_REGISTRY}/${IMAGE_NAME}:latest"
@@ -812,6 +781,10 @@ jobs:
           # Get image digest
           DIGEST=$(skopeo inspect docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:latest | jq -r '.Digest')
           echo "digest=${DIGEST}" >> $GITHUB_OUTPUT
+          
+          # Clean up staging tag from registry
+          echo "Cleaning up staging tag..."
+          skopeo delete docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:${STAGING_TAG} || echo "Warning: Could not delete staging tag"
       
       - name: Generate build summary
         run: |
@@ -821,7 +794,7 @@ jobs:
           GPU_VARIANT="${{ needs.detect-changes.outputs.gpu_variant }}"
           MACCEL_COMMIT="${{ needs.detect-changes.outputs.maccel_commit }}"
           IMAGE_DIGEST="${{ steps.push.outputs.digest }}"
-          GPU_TAG="${BUILD_DATE}-${GPU_VARIANT}"
+          GPU_TAG="${{ needs.build-and-stage.outputs.gpu_tag }}"
           
           cat >> $GITHUB_STEP_SUMMARY << EOF
           # Vespera Build Summary
