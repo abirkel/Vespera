@@ -205,6 +205,21 @@ jobs:
         with:
           name: version-metadata
       
+      - name: Free up disk space
+        run: |
+          echo "Disk space before cleanup:"
+          df -h
+          
+          # Remove unnecessary packages and files to free up space
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          
+          echo "Disk space after cleanup:"
+          df -h
+      
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -652,19 +667,29 @@ jobs:
             echo "ℹ No Flatpak applications configured for removal"
           fi
           
-          # Verify added Flatpaks are present
+          # Verify added Flatpaks are configured for first-boot installation
           if [ -n "$ADD_FLATPAKS" ]; then
-            echo "Checking added Flatpak applications..."
-            for app in $ADD_FLATPAKS; do
-              # Check if Flatpak is in the system installation
-              if buildah run $CONTAINER flatpak list --system --app --columns=application 2>/dev/null | grep -q "^${app}$"; then
-                echo "✓ Flatpak $app successfully installed"
-              else
-                echo "⚠ Flatpak $app should be installed but is missing"
-                ADDED_OK="false"
-                ADDED_DETAILS="${ADDED_DETAILS}${app} (missing), "
-              fi
-            done
+            echo "Checking Flatpak first-boot configuration..."
+            if buildah run $CONTAINER test -f /etc/vespera-flatpaks-to-install.txt; then
+              CONFIGURED_FLATPAKS=$(buildah run $CONTAINER cat /etc/vespera-flatpaks-to-install.txt)
+              echo "✓ Flatpaks configured for first-boot installation:"
+              echo "$CONFIGURED_FLATPAKS"
+              
+              # Verify each configured Flatpak is in the list
+              for app in $ADD_FLATPAKS; do
+                if echo "$CONFIGURED_FLATPAKS" | grep -q "$app"; then
+                  echo "✓ Flatpak $app is configured"
+                else
+                  echo "⚠ Flatpak $app is not in configuration file"
+                  ADDED_OK="false"
+                  ADDED_DETAILS="${ADDED_DETAILS}${app} (not configured), "
+                fi
+              done
+            else
+              echo "⚠ Flatpak configuration file not found"
+              ADDED_OK="false"
+              ADDED_DETAILS="Configuration file missing"
+            fi
           else
             echo "ℹ No Flatpak applications configured for addition"
           fi

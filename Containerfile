@@ -153,14 +153,14 @@ RUN FLATPAKS_TO_REMOVE=$(yq eval '.packages.remove_flatpak[]' /tmp/vespera-confi
         done; \
     fi
 
-# Handle Flatpak installation
+# Configure Flatpaks to install on first boot
+# Note: Installing Flatpaks during image build causes disk space issues
+# Instead, we configure them to be installed automatically on first boot
 RUN FLATPAKS_TO_ADD=$(yq eval '.packages.add_flatpak[]' /tmp/vespera-config.yaml 2>/dev/null) && \
     if [ -n "$FLATPAKS_TO_ADD" ]; then \
-        echo "$FLATPAKS_TO_ADD" | while read -r flatpak; do \
-            if [ -n "$flatpak" ]; then \
-                flatpak install -y flathub "$flatpak" 2>/dev/null || true; \
-            fi; \
-        done; \
+        mkdir -p /etc/flatpak/remotes.d && \
+        echo "$FLATPAKS_TO_ADD" > /etc/vespera-flatpaks-to-install.txt && \
+        echo "Flatpaks configured for first-boot installation: $(echo "$FLATPAKS_TO_ADD" | tr '\n' ' ')"; \
     fi
 
 # =============================================================================
