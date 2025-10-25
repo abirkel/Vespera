@@ -807,9 +807,57 @@ jobs:
           DIGEST=$(skopeo inspect docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:latest | jq -r '.Digest')
           echo "digest=${DIGEST}" >> $GITHUB_OUTPUT
           
-          # Clean up staging tag from registry
-          echo "Cleaning up staging tag..."
-          skopeo delete docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:${STAGING_TAG} || echo "Warning: Could not delete staging tag"
+          # Remove staging tag from production image using dummy image approach
+          echo ""
+          echo "Removing staging tag from production image..."
+          echo "Creating dummy image to move staging tag..."
+          
+          # Create a minimal dummy image from scratch
+          DUMMY_CONTAINER=$(buildah from scratch)
+          
+          # Commit and tag the dummy with the staging tag
+          buildah commit --rm ${DUMMY_CONTAINER} ${IMAGE_REGISTRY}/${IMAGE_NAME}:${STAGING_TAG}
+          
+          # Push the dummy image (this moves the staging tag from production to dummy)
+          echo "Pushing dummy image (moves staging tag)..."
+          buildah push ${IMAGE_REGISTRY}/${IMAGE_NAME}:${STAGING_TAG}
+          
+          # Get the version ID of the dummy image using GitHub API
+          echo "Getting dummy image version ID..."
+          PACKAGE_NAME="vespera"
+          OWNER="${{ github.repository_owner }}"
+          
+          # List all versions and find the one with our staging tag
+          VERSIONS_JSON=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/users/${OWNER}/packages/container/${PACKAGE_NAME}/versions")
+          
+          # Find version ID that has the staging tag
+          VERSION_ID=$(echo "$VERSIONS_JSON" | jq -r --arg tag "${STAGING_TAG}" \
+            '.[] | select(.metadata.container.tags[] == $tag) | .id')
+          
+          if [ -n "$VERSION_ID" ]; then
+            echo "Found dummy version ID: ${VERSION_ID}"
+            echo "Deleting dummy version via GitHub API..."
+            
+            # Delete the dummy version using GitHub API
+            DELETE_RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/users/${OWNER}/packages/container/${PACKAGE_NAME}/versions/${VERSION_ID}")
+            
+            HTTP_CODE=$(echo "$DELETE_RESPONSE" | tail -n1)
+            
+            if [ "$HTTP_CODE" = "204" ]; then
+              echo "✅ Successfully deleted dummy version and removed staging tag"
+            else
+              echo "⚠️ Warning: Failed to delete dummy version (HTTP ${HTTP_CODE})"
+              echo "Response: $(echo "$DELETE_RESPONSE" | head -n-1)"
+            fi
+          else
+            echo "⚠️ Warning: Could not find dummy version ID"
+            echo "Staging tag may not have been moved successfully"
+          fi
       
       - name: Generate build summary
         run: |
