@@ -170,3 +170,5 @@ build:
   image_name: "vespera"
   # Image will be tagged with date (e.g., 20241024) and 'latest'
   # Full image name: ghcr.io/YOUR_USERNAME/vespera:latest
+
+# Build test triggered at 2025-10-26 01:54:22 UTC
