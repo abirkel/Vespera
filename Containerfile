@@ -43,10 +43,17 @@ WORKDIR /tmp/maccel
 
 # Build kernel module for the target kernel version
 # The driver is in the driver/ subdirectory
+# In containers, kernel-devel installs to /usr/src/kernels/ not /lib/modules/
 RUN KERNEL_VERSION=$(cat /tmp/target-kernel-version) && \
     echo "Building maccel module for kernel ${KERNEL_VERSION}..." && \
+    KERNEL_SRC="/usr/src/kernels/${KERNEL_VERSION}.x86_64" && \
+    if [ ! -d "$KERNEL_SRC" ]; then \
+        echo "Kernel source not found at $KERNEL_SRC, checking alternatives..."; \
+        KERNEL_SRC=$(ls -d /usr/src/kernels/*${KERNEL_VERSION}* 2>/dev/null | head -n1); \
+    fi && \
+    echo "Using kernel source: $KERNEL_SRC" && \
     cd driver && \
-    make KVER=${KERNEL_VERSION}
+    make KDIR="$KERNEL_SRC"
 
 # Build CLI tool (in root directory, not maccel-tui/)
 RUN cargo build --bin maccel --release
