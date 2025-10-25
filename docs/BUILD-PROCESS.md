@@ -25,19 +25,42 @@ Vespera uses a containerized build process with the following key features:
 
 The build process uses a multi-stage Containerfile to keep the final image clean and minimal.
 
-### Stage 1: Maccel Builder
+### Stage 1: Aurora Inspector
 
 ```dockerfile
-FROM fedora:41 AS maccel-builder
+FROM fedora:latest AS aurora-inspector
 ```
 
-**Purpose**: Build maccel kernel module and CLI from source
+**Purpose**: Query Aurora image metadata to determine Fedora and kernel versions
 
 **What happens**:
-1. Install build dependencies (gcc, make, kernel-devel, rust, cargo)
-2. Clone maccel repository from GitHub
-3. Build kernel module using `make` in the `driver/` directory
-4. Build CLI tool using `cargo build --bin maccel --release`
+1. Install `skopeo` and `jq` for image inspection
+2. Query the target Aurora image (with GPU variant) to get metadata
+3. Extract Fedora version from image labels
+4. Extract kernel version from image labels
+5. Validate that kernel version is available (required for maccel build)
+6. Save version information to temporary files
+
+**Why this stage?**
+- Aurora images may use different Fedora versions over time
+- Kernel version must match exactly for maccel module compilation
+- GPU variants may have different base configurations
+- Ensures build compatibility without hardcoding versions
+
+### Stage 2: Maccel Builder
+
+```dockerfile
+FROM fedora:latest AS maccel-builder
+```
+
+**Purpose**: Build maccel kernel module and CLI from source using detected versions
+
+**What happens**:
+1. Copy detected Fedora and kernel versions from inspector stage
+2. Install build dependencies (gcc, make, kernel-devel for specific kernel, rust, cargo)
+3. Clone maccel repository from GitHub
+4. Build kernel module using `make` in the `driver/` directory for the exact kernel version
+5. Build CLI tool using `cargo build --bin maccel --release`
 
 **Output artifacts**:
 - `driver/maccel.ko` - Compiled kernel module
@@ -48,23 +71,23 @@ FROM fedora:41 AS maccel-builder
 - Reduces final image size significantly
 - Follows Docker best practices
 
-### Stage 2: Aurora Customization
+### Stage 3: Aurora Customization
 
 ```dockerfile
-FROM ghcr.io/ublue-os/${AURORA_VARIANT}:${FEDORA_VERSION}
+FROM ghcr.io/ublue-os/${AURORA_VARIANT}-${GPU_VARIANT}:${AURORA_DATE}
 ```
 
-**Purpose**: Customize Aurora and integrate maccel
+**Purpose**: Customize Aurora with GPU variant support and integrate maccel
 
 **What happens**:
-1. Start with Aurora base image (aurora or aurora-dx)
+1. Start with Aurora base image with GPU variant (e.g., aurora-nvidia, aurora-dx-nvidia-open)
 2. Install yq for YAML parsing
 3. Read `vespera-config.yaml` for customization instructions
 4. Remove specified RPM packages using `rpm-ostree override remove`
 5. Add specified RPM packages using `rpm-ostree install`
 6. Remove specified Flatpak applications
-7. Add specified Flatpak applications
-8. Copy maccel artifacts from builder stage
+7. Configure specified Flatpak applications for first-boot installation
+8. Copy maccel artifacts from builder stage (kernel module and CLI)
 9. Install maccel kernel module to `/usr/lib/modules/*/extra/maccel/`
 10. Run `depmod` to update module dependencies
 11. Install maccel CLI to `/usr/local/bin/maccel`
@@ -90,17 +113,20 @@ Maccel consists of two components that need careful integration:
 #### 1. Kernel Module Build
 
 ```bash
-# In builder stage
+# In builder stage, using detected kernel version
+KERNEL_VERSION=$(cat /tmp/kernel-version)
+KERNEL_SRC="/usr/src/kernels/${KERNEL_VERSION}"
 cd /tmp/maccel/driver
-make
+make KDIR="$KERNEL_SRC"
 ```
 
-This produces `maccel.ko` compiled for the Fedora 41 kernel.
+This produces `maccel.ko` compiled for the exact kernel version detected from the Aurora image.
 
 **Key considerations**:
-- Must match the kernel version in Aurora base image
-- Requires kernel headers and development tools
-- Uses standard Linux kernel module build system
+- Kernel version is dynamically detected from the target Aurora image
+- Must match exactly the kernel version in Aurora base image
+- Supports different GPU variants which may have different kernel configurations
+- Uses standard Linux kernel module build system with explicit kernel source path
 
 #### 2. CLI Tool Build
 
@@ -171,19 +197,25 @@ The automated build process consists of three jobs:
 **Purpose**: Determine if a build is necessary
 
 **Steps**:
-1. Check Aurora base image for new versions (using `skopeo inspect`)
-2. Check maccel repository for new commits (using `git ls-remote`)
-3. Compare with previous build metadata
-4. Decide whether to build based on:
+1. Read Aurora variant and GPU variant from `vespera-config.yaml`
+2. Validate GPU variant (must be main, nvidia, or nvidia-open)
+3. Construct full Aurora image name with GPU variant support
+4. Check Aurora base image for new versions (using `skopeo inspect`)
+5. Check maccel repository for new commits (using `git ls-remote`)
+6. Compare with previous build metadata
+7. Decide whether to build based on:
    - Force build flag (manual trigger)
    - Push to main branch
    - Aurora version change
    - Maccel commit change
+   - GPU variant change
    - No previous build metadata
 
 **Outputs**:
 - `should_build`: Boolean indicating if build is needed
 - `aurora_version`: Current Aurora image digest
+- `aurora_variant`: Aurora variant (aurora or aurora-dx)
+- `gpu_variant`: GPU variant (main, nvidia, or nvidia-open)
 - `maccel_commit`: Current maccel commit hash
 - `build_date`: Date stamp for tagging
 
@@ -192,33 +224,40 @@ The automated build process consists of three jobs:
 - Ensures builds only happen when there are actual changes
 - Provides transparency about what triggered the build
 
-### Job 2: Build
+### Job 2: Build and Stage
 
-**Purpose**: Build the Vespera image
+**Purpose**: Build the Vespera image and push to staging
 
 **Runs**: Only if `should_build` is true
 
 **Steps**:
 1. Checkout repository
-2. Install build tools (buildah, podman, skopeo)
-3. Build image using `buildah bud`
-4. Tag with date and 'latest'
-5. Add metadata labels:
+2. Free up disk space (remove unnecessary files)
+3. Install build tools (buildah, podman, skopeo)
+4. Build image using `buildah bud` with GPU variant support
+5. Tag with unique staging tag
+6. Add comprehensive metadata labels:
    - Build date
-   - Aurora digest
+   - Aurora variant and digest
+   - GPU variant
    - Maccel commit
    - Git revision
-6. Run basic validation
-7. Upload build metadata as artifact
+7. Push staging image to registry
+8. Upload build metadata as artifact
 
 **Build command**:
 ```bash
 buildah bud \
   --format docker \
   --layers \
-  --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:${BUILD_DATE} \
-  --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:latest \
+  --build-arg AURORA_VARIANT=${AURORA_VARIANT} \
+  --build-arg GPU_VARIANT=${GPU_VARIANT} \
+  --build-arg IMAGE_REGISTRY=${IMAGE_REGISTRY} \
+  --build-arg IMAGE_NAME=${IMAGE_NAME} \
+  --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:${STAGING_TAG} \
   --label "org.vespera.build.date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+  --label "org.vespera.aurora.variant=${AURORA_VARIANT}" \
+  --label "org.vespera.gpu.variant=${GPU_VARIANT}" \
   --label "org.vespera.aurora.digest=${AURORA_DIGEST}" \
   --label "org.vespera.maccel.commit=${MACCEL_COMMIT}" \
   .
@@ -229,22 +268,23 @@ buildah bud \
 - Works well with OCI images
 - Good integration with Fedora Atomic tooling
 
-### Job 3: Publish
+### Job 3: Verify and Publish
 
-**Purpose**: Push the built image to GitHub Container Registry
+**Purpose**: Comprehensive verification and publishing of the built image
 
 **Runs**: Only if build succeeded
 
 **Steps**:
-1. Rebuild image (artifacts don't persist between jobs)
-2. Authenticate to GitHub Container Registry
-3. Push both tags (date and latest)
-4. Generate build summary with:
-   - Build information
-   - Upstream versions
-   - Pull command
-   - Rebase command
-5. Store build metadata as JSON
+1. Pull staging image for verification
+2. **GPU Variant Verification**: Verify correct GPU variant configuration and labels
+3. **Maccel Verification**: Check kernel module, CLI binary, udev rules, group, and module loading config
+4. **Package Verification**: Verify RPM and Flatpak customizations were applied correctly
+5. Generate comprehensive verification summary
+6. Tag verified image with production tags (date, latest, GPU variant)
+7. Push all production tags to registry
+8. Clean up staging tag using dummy image technique
+9. Generate build summary with pull and rebase commands
+10. Store comprehensive build metadata as JSON
 
 **Registry authentication**:
 ```bash

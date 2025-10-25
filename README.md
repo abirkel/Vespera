@@ -36,7 +36,7 @@ Aurora provides three GPU-specific variants to optimize driver support for diffe
 
 The GPU variant affects which base image Vespera uses (e.g., `aurora-nvidia`, `aurora-main`). All other Vespera features work identically across GPU variants.
 
-Use `./tools/check-aurora-packages.sh` to see Aurora's current package list, or check the [static reference](.references/AURORA-CUSTOMIZATIONS.md).
+Use `./tools/check-aurora-packages.sh` to see Aurora's current package list, or check the [static reference](.references/AURORA-CUSTOMIZATIONS.md). The tool supports GPU variants: `./tools/check-aurora-packages.sh --gpu-variant nvidia`.
 
 Vespera customizes this foundation by:
 - **Package Customization**: Remove unwanted packages and add preferred alternatives (both RPM and Flatpak)
@@ -53,28 +53,15 @@ Vespera customizes this foundation by:
 
 ### Maccel Integration
 
-[Maccel](https://github.com/Gnarus-G/maccel) is a Linux kernel driver that provides customizable mouse acceleration, similar to what's available on Windows and macOS. Vespera integrates maccel directly into the immutable image:
+[Maccel](https://github.com/Gnarus-G/maccel) is a Linux kernel driver that provides customizable mouse acceleration, similar to what's available on Windows and macOS. Vespera integrates maccel directly into the immutable image with:
 
-- **Kernel Module**: Built from source during image creation and integrated into the kernel module tree
+- **Kernel Module**: Built from source and integrated into the kernel module tree
 - **CLI Tool**: Rust-based command-line interface for configuring acceleration curves
 - **TUI Interface**: Interactive terminal UI for easy configuration (`maccel tui`)
-- **Auto-loading**: Kernel module loads automatically at boot via `/etc/modules-load.d/`
-- **Udev Rules**: Proper device permissions configured for mouse input access
+- **Auto-loading**: Kernel module loads automatically at boot
 - **User Access**: Non-root access via `maccel` group membership
-- **Multi-Stage Build**: Build tools kept out of final image for minimal size
 
-The integration uses a multi-stage Docker build:
-1. **Builder Stage**: Compiles kernel module and CLI from source with all build dependencies
-2. **Final Stage**: Copies only the built artifacts (kernel module + binary) into the Aurora base
-3. **Configuration**: Sets up module loading, udev rules, and group permissions
-
-This approach ensures maccel is fully integrated and ready to use immediately after installation, without requiring DKMS or runtime compilation.
-
-### Automated Builds
-- **Daily Checks**: Automatically checks for Aurora and maccel updates
-- **Smart Building**: Only builds when upstream changes are detected
-- **GitHub Actions**: Fully automated CI/CD pipeline
-- **Container Registry**: Built images published to GitHub Container Registry
+This ensures maccel is fully integrated and ready to use immediately after installation, without requiring DKMS or runtime compilation.
 
 ## Configuration
 
@@ -131,7 +118,7 @@ To change the GPU variant for your Vespera build:
 **Documentation**:
 - [Configuration Guide](docs/CONFIGURATION.md) - Detailed configuration options and examples
 - [Package Inspection Tools](tools/README.md) - Tools to analyze Aurora and package chains
-- [Build Process](docs/BUILD-PROCESS.md) - How Vespera is built
+- [Build Process](docs/BUILD-PROCESS.md) - How Vespera is built and verified
 - [GPU Variant Support](docs/GPU-VARIANT-SUPPORT.md) - Detailed GPU variant information
 
 ## Installation
@@ -162,29 +149,7 @@ For a fresh installation, you'll need to:
 
 ### Maccel Mouse Acceleration
 
-After installation, the maccel driver is ready to use:
-
-```bash
-# Check if maccel module is loaded
-lsmod | grep maccel
-
-# View maccel help
-maccel --help
-
-# Launch interactive TUI for configuration
-maccel tui
-
-# Set acceleration sensitivity (command line)
-maccel set --sensitivity 1.5
-
-# Apply a custom acceleration curve
-maccel set --curve "0.0 0.0 0.5 0.3 1.0 1.0"
-
-# Check current configuration
-maccel status
-```
-
-**Adding your user to the maccel group** (for non-root access):
+First, add your user to the maccel group for non-root access:
 
 ```bash
 # Add your user to the maccel group
@@ -193,10 +158,24 @@ sudo usermod -aG maccel $USER
 # Log out and back in for group changes to take effect
 ```
 
-**Maccel Configuration Tips**:
+After installation, the maccel driver is ready to use:
+
+```bash
+# Check if maccel module is loaded
+lsmod | grep maccel
+
+# Launch interactive TUI for configuration (recommended)
+maccel tui
+
+# Or use command line options
+maccel set --sensitivity 1.5
+maccel set --curve "0.0 0.0 0.5 0.3 1.0 1.0"
+maccel status
+```
+
+**Tips**:
 - Start with the TUI (`maccel tui`) for an interactive experience
 - Sensitivity values typically range from 0.5 (slower) to 2.0 (faster)
-- Custom curves allow fine-grained control over acceleration behavior
 - Configuration persists across reboots
 
 ### Package Management
@@ -214,119 +193,29 @@ rpm-ostree upgrade
 rpm-ostree rollback
 ```
 
-## Building Locally
 
-While Vespera is designed for automated GitHub Actions builds, you can build locally:
 
-```bash
-# Build the container image
-podman build -t vespera:local -f Containerfile .
+## Getting Started
 
-# Run verification
-podman run --rm vespera:local /usr/local/bin/maccel --version
-```
-
-## Project Structure
-
-```
-vespera/
-├── vespera-config.yaml      # Main configuration file
-├── Containerfile            # Multi-stage build definition
-├── .github/
-│   └── workflows/
-│       └── build-vespera.yml  # Automated build workflow
-├── docs/
-│   ├── CONFIGURATION.md     # Configuration guide
-│   └── BUILD-PROCESS.md     # Build process documentation
-├── .references/             # Reference documentation
-│   ├── AURORA-CUSTOMIZATIONS.md
-│   ├── MACCEL-BUILD-ANALYSIS.md
-│   └── MACCEL-CHANGES-SUMMARY.md
-├── tools/                   # Package inspection tools
-│   ├── check-aurora-packages.sh
-│   ├── check-kinoite-packages.sh
-│   ├── compare-packages.sh
-│   └── README.md
-└── README.md               # This file
-```
-
-## How It Works
-
-1. **Change Detection**: GitHub Actions checks daily for updates to Aurora base image and maccel repository
-2. **Conditional Build**: Only builds when changes are detected, saving resources
-3. **Multi-Stage Build**: 
-   - Stage 1: Builds maccel kernel module and CLI from source
-   - Stage 2: Customizes Aurora packages and integrates maccel
-4. **Verification**: Automated checks confirm maccel integration and package customizations
-5. **Publication**: Successfully built images are pushed to GitHub Container Registry
-
-## Development
-
-### Repository Setup
-
-1. Fork or clone this repository
+1. Fork this repository
 2. Customize `vespera-config.yaml` for your needs
-3. Push to GitHub
-4. Configure GitHub Actions secrets (GITHUB_TOKEN is automatic)
-5. Workflow will run automatically
-
-### Testing Changes
-
-- Push changes to trigger a build
-- Monitor GitHub Actions workflow
-- Check verification job output
-- Review published image in container registry
+3. Push to GitHub - the workflow will build your image automatically
+4. Rebase your system to the built image
 
 ## Troubleshooting
 
-### Build Failures
+**Build Issues**: Check GitHub Actions logs for package conflicts or build errors
 
-Check GitHub Actions logs for:
-- Package dependency conflicts
-- Maccel build errors
-- Base image availability issues
+**Maccel Issues**: Verify user is in `maccel` group (`groups`) and module is loaded (`lsmod | grep maccel`)
 
-### Runtime Issues
-
-If maccel doesn't work after installation:
-- Verify module is loaded: `lsmod | grep maccel`
-- Check module loading config: `cat /etc/modules-load.d/maccel.conf`
-- Verify user is in maccel group: `groups`
-- Check kernel compatibility
-
-### Package Conflicts
-
-If package customization fails:
-- Review removed packages for dependencies
-- Check that added packages are available in Fedora repos
-- Verify Flatpak applications exist on Flathub
-
-## Contributing
-
-Contributions are welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test the build
-5. Submit a pull request
-
-## License
-
-This project configuration is provided as-is for personal use. Please respect the licenses of:
-- [Aurora](https://github.com/ublue-os/aurora) - Apache 2.0
-- [Maccel](https://github.com/Gnarus-G/maccel) - MIT
-- Fedora and included packages - Various open source licenses
-
-## Acknowledgments
-
-- **Aurora Team**: For creating an excellent Fedora Atomic variant
-- **Maccel Project**: For the mouse acceleration driver
-- **Universal Blue**: For the infrastructure and tooling
-- **Fedora Project**: For the solid foundation
+**Package Issues**: Ensure removed packages don't have dependencies and added packages exist in Fedora repos
 
 ## Resources
 
-- [Aurora Documentation](https://getaurora.dev/)
-- [Maccel GitHub](https://github.com/Gnarus-G/maccel)
-- [Fedora Atomic Documentation](https://docs.fedoraproject.org/en-US/fedora-silverblue/)
-- [Universal Blue](https://universal-blue.org/)
+- [Aurora Documentation](https://getaurora.dev/) - Base image documentation
+- [Maccel GitHub](https://github.com/Gnarus-G/maccel) - Mouse acceleration driver
+- [Fedora Atomic Documentation](https://docs.fedoraproject.org/en-US/fedora-silverblue/) - Immutable OS concepts
+
+## License
+
+This project configuration is provided as-is for personal use. Respects licenses of Aurora (Apache 2.0), Maccel (MIT), and Fedora packages.
