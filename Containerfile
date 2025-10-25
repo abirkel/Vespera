@@ -14,32 +14,43 @@ ARG AURORA_DATE=latest
 # =============================================================================
 # Stage 1: Build maccel kernel module and CLI
 # =============================================================================
-FROM fedora:41 AS maccel-builder
+# First, we need to determine the Fedora version from the Aurora image
+# This is a temporary stage just to query the Aurora image metadata
+FROM fedora:latest AS aurora-inspector
 
 # Re-declare ARGs needed in this stage
 ARG AURORA_VARIANT
 ARG GPU_VARIANT
-ARG FEDORA_VERSION
 ARG AURORA_DATE
 
-# Install build dependencies
-# Note: We need to build for the kernel version that will be in the final Aurora image
-# Query the target Aurora image to get its kernel version
-
-# Get kernel version from target Aurora image
-# Aurora images are tagged with 'latest', 'stable', or date-based tags, not Fedora version
+# Query Aurora image to get Fedora version and kernel version
 RUN dnf install -y skopeo jq && \
     AURORA_IMAGE="ghcr.io/ublue-os/${AURORA_VARIANT}-${GPU_VARIANT}:${AURORA_DATE}" && \
-    echo "Querying kernel version from ${AURORA_IMAGE}..." && \
-    KERNEL_VERSION=$(skopeo inspect docker://${AURORA_IMAGE} | jq -r '.Labels["ostree.linux"] // empty') && \
+    echo "Querying Aurora image: ${AURORA_IMAGE}..." && \
+    skopeo inspect docker://${AURORA_IMAGE} > /tmp/aurora-inspect.json && \
+    FEDORA_VERSION=$(jq -r '.Labels["org.opencontainers.image.version"] // .Labels["version"] // empty' /tmp/aurora-inspect.json | grep -oP 'fc\K[0-9]+' || echo "42") && \
+    KERNEL_VERSION=$(jq -r '.Labels["ostree.linux"] // empty' /tmp/aurora-inspect.json) && \
     if [ -z "$KERNEL_VERSION" ]; then \
         echo "ERROR: Could not determine kernel version from Aurora image ${AURORA_IMAGE}"; \
         echo "This is required to build the maccel kernel module for the correct kernel."; \
-        echo "Please check that the Aurora image exists and has the 'ostree.linux' label."; \
         exit 1; \
     fi && \
-    echo "Target kernel version: ${KERNEL_VERSION}" && \
-    echo "${KERNEL_VERSION}" > /tmp/target-kernel-version && \
+    echo "Detected Fedora version: ${FEDORA_VERSION}" && \
+    echo "Detected kernel version: ${KERNEL_VERSION}" && \
+    echo "${FEDORA_VERSION}" > /tmp/fedora-version && \
+    echo "${KERNEL_VERSION}" > /tmp/kernel-version
+
+# Now use the detected Fedora version for the actual builder
+FROM fedora:latest AS maccel-builder
+
+# Copy the detected versions from inspector stage
+COPY --from=aurora-inspector /tmp/fedora-version /tmp/fedora-version
+COPY --from=aurora-inspector /tmp/kernel-version /tmp/kernel-version
+
+# Install build dependencies using the detected versions
+RUN FEDORA_VERSION=$(cat /tmp/fedora-version) && \
+    KERNEL_VERSION=$(cat /tmp/kernel-version) && \
+    echo "Building for Fedora ${FEDORA_VERSION} with kernel ${KERNEL_VERSION}" && \
     dnf install -y \
         git \
         make \
@@ -60,12 +71,12 @@ WORKDIR /tmp/maccel
 # Build kernel module for the target kernel version
 # The driver is in the driver/ subdirectory
 # In containers, kernel-devel installs to /usr/src/kernels/ not /lib/modules/
-RUN KERNEL_VERSION=$(cat /tmp/target-kernel-version) && \
+RUN KERNEL_VERSION=$(cat /tmp/kernel-version) && \
     echo "Building maccel module for kernel ${KERNEL_VERSION}..." && \
-    KERNEL_SRC="/usr/src/kernels/${KERNEL_VERSION}.x86_64" && \
+    KERNEL_SRC="/usr/src/kernels/${KERNEL_VERSION}" && \
     if [ ! -d "$KERNEL_SRC" ]; then \
         echo "Kernel source not found at $KERNEL_SRC, checking alternatives..."; \
-        KERNEL_SRC=$(ls -d /usr/src/kernels/*${KERNEL_VERSION}* 2>/dev/null | head -n1); \
+        KERNEL_SRC=$(ls -d /usr/src/kernels/*$(echo ${KERNEL_VERSION} | cut -d. -f1-3)* 2>/dev/null | head -n1); \
     fi && \
     echo "Using kernel source: $KERNEL_SRC" && \
     cd driver && \
