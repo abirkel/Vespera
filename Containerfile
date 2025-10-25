@@ -116,9 +116,18 @@ RUN curl -L https://github.com/mikefarah/yq/releases/latest/download/yq_linux_am
     chmod +x /usr/bin/yq
 
 # Remove specified RPM packages
-RUN PACKAGES_TO_REMOVE=$(yq eval '.packages.remove_rpm[]' /tmp/vespera-config.yaml 2>/dev/null | tr '\n' ' ') && \
+RUN PACKAGES_TO_REMOVE=$(yq eval '.packages.remove_rpm[]' /tmp/vespera-config.yaml 2>/dev/null) && \
     if [ -n "$PACKAGES_TO_REMOVE" ]; then \
-        rpm-ostree override remove $PACKAGES_TO_REMOVE || true; \
+        echo "$PACKAGES_TO_REMOVE" | while read -r pkg; do \
+            if [ -n "$pkg" ]; then \
+                if rpm -q "$pkg" >/dev/null 2>&1; then \
+                    echo "Removing package: $pkg"; \
+                    rpm-ostree override remove "$pkg" || echo "Warning: Failed to remove $pkg"; \
+                else \
+                    echo "Package $pkg not installed, skipping"; \
+                fi; \
+            fi; \
+        done; \
     fi
 
 # Add specified RPM packages
@@ -132,7 +141,12 @@ RUN FLATPAKS_TO_REMOVE=$(yq eval '.packages.remove_flatpak[]' /tmp/vespera-confi
     if [ -n "$FLATPAKS_TO_REMOVE" ]; then \
         echo "$FLATPAKS_TO_REMOVE" | while read -r flatpak; do \
             if [ -n "$flatpak" ]; then \
-                flatpak remove -y "$flatpak" 2>/dev/null || true; \
+                if flatpak list --app | grep -q "$flatpak"; then \
+                    echo "Removing Flatpak: $flatpak"; \
+                    flatpak remove -y "$flatpak" 2>/dev/null || echo "Warning: Failed to remove $flatpak"; \
+                else \
+                    echo "Flatpak $flatpak not installed, skipping"; \
+                fi; \
             fi; \
         done; \
     fi

@@ -65,8 +65,10 @@ packages:
   #
   # Common candidates for removal:
   remove_rpm:
-    - sunshine  # Game streaming server (remove if you don't stream games)
-    - openrazer-daemon  # Razer hardware support (remove if no Razer devices)
+    # Note: Some packages may not be present in Aurora or may have dependencies
+    # The build will continue even if removal fails
+    # - sunshine  # Game streaming server (remove if you don't stream games)
+    # - openrazer-daemon  # Razer hardware support (remove if no Razer devices)
     # - tailscale  # VPN service (remove if using WireGuard or other VPN)
     # - tmux  # Terminal multiplexer (remove if you prefer screen or alternatives)
     # - borgbackup  # Backup tool (remove if using other backup solutions)
