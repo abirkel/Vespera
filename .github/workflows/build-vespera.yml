@@ -14,10 +14,11 @@ on:
         type: boolean
         default: false
   
-  # Trigger on push to main branch
+  # Trigger on push to main/master branch
   push:
     branches:
       - main
+      - master
     paths:
       - 'Containerfile'
       - 'vespera-config.yaml'
