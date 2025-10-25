@@ -19,8 +19,10 @@ RUN dnf install -y skopeo jq && \
     echo "Querying kernel version from ${AURORA_IMAGE}..." && \
     KERNEL_VERSION=$(skopeo inspect docker://${AURORA_IMAGE} | jq -r '.Labels["ostree.linux"] // empty') && \
     if [ -z "$KERNEL_VERSION" ]; then \
-        echo "Could not determine kernel version from Aurora image, using latest Fedora 41 kernel"; \
-        KERNEL_VERSION="6.17.4-100.fc41"; \
+        echo "ERROR: Could not determine kernel version from Aurora image ${AURORA_IMAGE}"; \
+        echo "This is required to build the maccel kernel module for the correct kernel."; \
+        echo "Please check that the Aurora image exists and has the 'ostree.linux' label."; \
+        exit 1; \
     fi && \
     echo "Target kernel version: ${KERNEL_VERSION}" && \
     echo "${KERNEL_VERSION}" > /tmp/target-kernel-version && \
