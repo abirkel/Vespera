@@ -20,17 +20,16 @@ FROM fedora:41 AS maccel-builder
 ARG AURORA_VARIANT
 ARG GPU_VARIANT
 ARG FEDORA_VERSION
+ARG AURORA_DATE
 
 # Install build dependencies
 # Note: We need to build for the kernel version that will be in the final Aurora image
 # Query the target Aurora image to get its kernel version
-ARG AURORA_VARIANT=aurora
-ARG GPU_VARIANT=nvidia
-ARG FEDORA_VERSION=41
 
 # Get kernel version from target Aurora image
+# Aurora images are tagged with 'latest', 'stable', or date-based tags, not Fedora version
 RUN dnf install -y skopeo jq && \
-    AURORA_IMAGE="ghcr.io/ublue-os/${AURORA_VARIANT}-${GPU_VARIANT}:${FEDORA_VERSION}" && \
+    AURORA_IMAGE="ghcr.io/ublue-os/${AURORA_VARIANT}-${GPU_VARIANT}:${AURORA_DATE}" && \
     echo "Querying kernel version from ${AURORA_IMAGE}..." && \
     KERNEL_VERSION=$(skopeo inspect docker://${AURORA_IMAGE} | jq -r '.Labels["ostree.linux"] // empty') && \
     if [ -z "$KERNEL_VERSION" ]; then \
@@ -88,7 +87,8 @@ ARG AURORA_DATE
 # Base image from Aurora with GPU variant support
 # The GPU variant will be appended to the Aurora variant name
 # Examples: aurora-nvidia, aurora-dx-nvidia-open, etc.
-FROM ghcr.io/ublue-os/${AURORA_VARIANT}-${GPU_VARIANT}:${FEDORA_VERSION}
+# Aurora images use 'latest', 'stable', or date-based tags, not Fedora version numbers
+FROM ghcr.io/ublue-os/${AURORA_VARIANT}-${GPU_VARIANT}:${AURORA_DATE}
 
 # Image metadata
 LABEL org.opencontainers.image.title="Vespera"
