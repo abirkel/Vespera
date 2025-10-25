@@ -37,13 +37,9 @@ jobs:
         with:
           image-names: vespera
           cut-off: ${{ github.event.inputs.max_age_days || '7' }} days ago UTC
-          keep-at-least: 1  # Keep at least 1 image regardless of age
-          untagged-only: false  # Delete tagged images (staging tags)
-          skip-tags: latest,nvidia,main,master  # Never delete these production tags
-          account-type: personal  # Use 'personal' for personal repos
+          account-type: personal
           token: ${{ secrets.GITHUB_TOKEN }}
           dry-run: ${{ github.event.inputs.dry_run || false }}
-          filter-tags: staging-*  # Only target staging tags
       
       - name: Generate cleanup report
         run: |
