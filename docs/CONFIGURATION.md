@@ -5,6 +5,7 @@ This guide provides detailed information about configuring Vespera through the `
 ## Table of Contents
 
 - [Base Configuration](#base-configuration)
+- [Build Configuration](#build-configuration)
 - [Package Customization](#package-customization)
 - [Maccel Integration](#maccel-integration)
 - [Common Configuration Examples](#common-configuration-examples)
@@ -111,6 +112,11 @@ The GPU variant determines which Aurora base image Vespera uses:
 - `nvidia-open` → builds from `ghcr.io/ublue-os/aurora-nvidia-open:41`
 - `main` → builds from `ghcr.io/ublue-os/aurora:41`
 
+The variant combination also determines your final Vespera image name following Aurora's convention:
+- `aurora` + `nvidia` → `ghcr.io/username/vespera-nvidia:latest`
+- `aurora-dx` + `nvidia` → `ghcr.io/username/vespera-dx-nvidia:latest`
+- `aurora` + `main` → `ghcr.io/username/vespera:latest`
+
 All Vespera features (package customization, maccel integration, etc.) work identically across all GPU variants. The only difference is the underlying GPU driver stack.
 
 #### Changing GPU Variants
@@ -126,13 +132,87 @@ To switch GPU variants:
 
 2. Commit and push to trigger a rebuild
 
-3. After the build completes, rebase your system:
+3. After the build completes, rebase your system to the new image name:
    ```bash
+   # For main GPU variant (produces vespera:latest)
    rpm-ostree rebase ostree-unverified-registry:ghcr.io/YOUR_USERNAME/vespera:latest
    systemctl reboot
    ```
 
-**Important**: Changing GPU variants rebuilds the entire image with different drivers. Only change this if you've changed your hardware or need different driver support.
+**Important**: Changing GPU variants rebuilds the entire image with different drivers AND changes the image name. Only change this if you've changed your hardware or need different driver support.
+
+## Build Configuration
+
+### Image Naming Convention
+
+Vespera follows Aurora's naming convention, creating different images for each variant combination:
+
+| Aurora Variant | GPU Variant | Final Image Name |
+|----------------|-------------|------------------|
+| `aurora` | `main` | `vespera` |
+| `aurora` | `nvidia` | `vespera-nvidia` |
+| `aurora` | `nvidia-open` | `vespera-nvidia-open` |
+| `aurora-dx` | `main` | `vespera-dx` |
+| `aurora-dx` | `nvidia` | `vespera-dx-nvidia` |
+| `aurora-dx` | `nvidia-open` | `vespera-dx-nvidia-open` |
+
+This allows you to have multiple Vespera variants simultaneously, just like Aurora.
+
+### Build Strategy
+
+Configure how many variants to build:
+
+```yaml
+build:
+  # Build strategy: "single" or "matrix"
+  strategy: "single"  # Default: only builds your specific configuration
+  
+  # Base image name (modified based on variant)
+  image_name: "vespera"
+  
+  # Registry to publish to
+  registry: "ghcr.io"
+```
+
+#### Single Build Strategy (Recommended)
+
+```yaml
+build:
+  strategy: "single"
+```
+
+**Behavior**:
+- Builds only the variant/GPU combination specified in your `base` configuration
+- Efficient resource usage - only builds what you need
+- Produces one image with Aurora-style naming
+- Recommended for personal use
+
+**Example**: With `aurora` + `nvidia`, produces `ghcr.io/username/vespera-nvidia:latest`
+
+#### Matrix Build Strategy (Future)
+
+```yaml
+build:
+  strategy: "matrix"
+```
+
+**Behavior**:
+- Would build all 6 possible variant/GPU combinations
+- Higher resource usage but provides complete coverage
+- Useful for projects supporting multiple configurations
+
+**Note**: Matrix builds are not yet implemented but the configuration option is reserved for future use.
+
+### Registry Configuration
+
+```yaml
+build:
+  registry: "ghcr.io"  # GitHub Container Registry (default)
+  # registry: "docker.io"  # Docker Hub
+  # registry: "quay.io"   # Red Hat Quay
+```
+
+Most users should stick with GitHub Container Registry (`ghcr.io`) as it's free and integrates well with GitHub Actions.
 
 ## Package Customization
 
@@ -295,6 +375,11 @@ base:
   gpu_variant: "nvidia"  # Change based on your hardware
   registry: "ghcr.io/ublue-os"
 
+build:
+  strategy: "single"  # Only build what you need
+  registry: "ghcr.io"
+  image_name: "vespera"  # Will become vespera-nvidia
+
 packages:
   remove_rpm:
     - sunshine  # Don't need game streaming
@@ -311,11 +396,9 @@ packages:
 maccel:
   repository: "https://github.com/Gnarus-G/maccel"
   enabled: true
-
-build:
-  registry: "ghcr.io"
-  image_name: "vespera"
 ```
+
+**Result**: Produces `ghcr.io/username/vespera-nvidia:latest`
 
 ### Developer Configuration (Using aurora-dx)
 
@@ -324,6 +407,11 @@ base:
   variant: "aurora-dx"  # Use developer variant
   gpu_variant: "nvidia"  # Change based on your hardware
   registry: "ghcr.io/ublue-os"
+
+build:
+  strategy: "single"
+  registry: "ghcr.io"
+  image_name: "vespera"  # Will become vespera-dx-nvidia
 
 packages:
   remove_rpm:
@@ -350,11 +438,9 @@ packages:
 maccel:
   repository: "https://github.com/Gnarus-G/maccel"
   enabled: true
-
-build:
-  registry: "ghcr.io"
-  image_name: "vespera"
 ```
+
+**Result**: Produces `ghcr.io/username/vespera-dx-nvidia:latest`
 
 ### Gaming Configuration
 
@@ -363,6 +449,11 @@ base:
   variant: "aurora"  # Standard variant is fine for gaming
   gpu_variant: "nvidia"  # Most gaming PCs have NVIDIA GPUs
   registry: "ghcr.io/ublue-os"
+
+build:
+  strategy: "single"
+  registry: "ghcr.io"
+  image_name: "vespera"  # Will become vespera-nvidia
 
 packages:
   remove_rpm:
@@ -387,11 +478,9 @@ packages:
 maccel:
   repository: "https://github.com/Gnarus-G/maccel"
   enabled: true
-
-build:
-  registry: "ghcr.io"
-  image_name: "vespera"
 ```
+
+**Result**: Produces `ghcr.io/username/vespera-nvidia:latest`
 
 ### Minimal/Lightweight Configuration
 
@@ -400,6 +489,11 @@ base:
   variant: "aurora"
   gpu_variant: "nvidia"  # Change based on your hardware
   registry: "ghcr.io/ublue-os"
+
+build:
+  strategy: "single"
+  registry: "ghcr.io"
+  image_name: "vespera"  # Will become vespera-nvidia
 
 packages:
   # Remove as much as possible
@@ -433,11 +527,9 @@ packages:
 maccel:
   repository: "https://github.com/Gnarus-G/maccel"
   enabled: true
-
-build:
-  registry: "ghcr.io"
-  image_name: "vespera"
 ```
+
+**Result**: Produces `ghcr.io/username/vespera-nvidia:latest`
 
 ## What Aurora Already Includes
 

@@ -78,6 +78,11 @@ base:
   # - nvidia-open: NVIDIA open-source drivers (RTX 20-series+)
   # - main: Intel/AMD open-source drivers
 
+build:
+  # Build strategy: "single" or "matrix"
+  strategy: "single"  # "single" builds only your config, "matrix" builds all variants
+  image_name: "vespera"  # Base name (will be modified based on variant)
+
 packages:
   # Remove packages you don't want
   remove_rpm:
@@ -109,7 +114,8 @@ To change the GPU variant for your Vespera build:
 
 3. After the build completes, rebase to the new image:
    ```bash
-   rpm-ostree rebase ostree-unverified-registry:ghcr.io/YOUR_USERNAME/vespera:latest
+   # For NVIDIA GPU variant (default configuration)
+   rpm-ostree rebase ostree-unverified-registry:ghcr.io/YOUR_USERNAME/vespera-nvidia:latest
    systemctl reboot
    ```
 
@@ -127,16 +133,40 @@ To change the GPU variant for your Vespera build:
 - A system capable of running Fedora Atomic (x86_64 architecture)
 - Existing Fedora Atomic/Kinoite installation (for rebasing)
 
+### Image Naming Convention
+
+Vespera follows Aurora's naming convention, creating different images for each variant combination:
+
+| Configuration | Image Name | Description |
+|---------------|------------|-------------|
+| `aurora` + `main` | `vespera` | Base image with Intel/AMD GPU support |
+| `aurora` + `nvidia` | `vespera-nvidia` | Base image with NVIDIA proprietary drivers |
+| `aurora` + `nvidia-open` | `vespera-nvidia-open` | Base image with NVIDIA open drivers |
+| `aurora-dx` + `main` | `vespera-dx` | Developer variant with Intel/AMD GPU support |
+| `aurora-dx` + `nvidia` | `vespera-dx-nvidia` | Developer variant with NVIDIA proprietary drivers |
+| `aurora-dx` + `nvidia-open` | `vespera-dx-nvidia-open` | Developer variant with NVIDIA open drivers |
+
+The default configuration (`aurora` + `nvidia`) produces `vespera-nvidia`.
+
 ### Rebasing to Vespera
 
 Once the image is built and published, you can rebase your existing Fedora Atomic system:
 
 ```bash
-# Rebase to Vespera
-rpm-ostree rebase ostree-unverified-registry:ghcr.io/YOUR_USERNAME/vespera:latest
+# Rebase to Vespera (NVIDIA variant - matches default config)
+rpm-ostree rebase ostree-unverified-registry:ghcr.io/YOUR_USERNAME/vespera-nvidia:latest
 
 # Reboot to apply changes
 systemctl reboot
+```
+
+**For other variants**, use the corresponding image name from the table above:
+```bash
+# Developer variant with NVIDIA
+rpm-ostree rebase ostree-unverified-registry:ghcr.io/YOUR_USERNAME/vespera-dx-nvidia:latest
+
+# Base variant with Intel/AMD GPU
+rpm-ostree rebase ostree-unverified-registry:ghcr.io/YOUR_USERNAME/vespera:latest
 ```
 
 ### Fresh Installation

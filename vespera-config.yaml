@@ -164,11 +164,31 @@ maccel:
 # Build configuration
 #
 # These settings control how the image is built and published.
-# You typically don't need to change these unless you're forking the project.
 build:
   registry: "ghcr.io"
+  
+  # Build strategy: "single" or "matrix"
+  #
+  # single: Build only the variant/GPU combination specified above
+  #   - Produces one image with Aurora-style naming
+  #   - Examples: vespera-nvidia, vespera-dx-nvidia, vespera (for aurora+main)
+  #   - Efficient for personal use when you only need one variant
+  #
+  # matrix: Build all possible variant/GPU combinations (6 total)
+  #   - Produces: vespera, vespera-nvidia, vespera-nvidia-open, 
+  #              vespera-dx, vespera-dx-nvidia, vespera-dx-nvidia-open
+  #   - Useful for projects that need to support multiple configurations
+  #   - Uses more build resources and registry storage
+  strategy: "single"
+  
+  # Base image name (will be modified based on variant/GPU selection)
+  # Final names follow Aurora convention:
+  #   aurora + main = vespera
+  #   aurora + nvidia = vespera-nvidia  
+  #   aurora + nvidia-open = vespera-nvidia-open
+  #   aurora-dx + main = vespera-dx
+  #   aurora-dx + nvidia = vespera-dx-nvidia
+  #   aurora-dx + nvidia-open = vespera-dx-nvidia-open
   image_name: "vespera"
-  # Image will be tagged with date (e.g., 20241024) and 'latest'
-  # Full image name: ghcr.io/YOUR_USERNAME/vespera:latest
 
 # Build test triggered at 2025-10-26 01:54:22 UTC

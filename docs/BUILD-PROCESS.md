@@ -16,10 +16,46 @@ This document explains how Vespera is built, including the multi-stage build app
 Vespera uses a containerized build process with the following key features:
 
 1. **Multi-stage Docker build**: Separates build tools from the final image
-2. **Aurora base**: Builds on top of Aurora's curated package selection
-3. **Package customization**: Removes unwanted packages and adds preferred alternatives
-4. **Maccel integration**: Builds and integrates the maccel driver from source
-5. **Automated builds**: GitHub Actions checks for upstream changes and builds automatically
+2. **Aurora base**: Builds on top of Aurora's curated package selection with GPU variant support
+3. **Aurora-style naming**: Creates separate images for each variant combination (e.g., `vespera-nvidia`, `vespera-dx-nvidia`)
+4. **Flexible build strategy**: Single variant builds (efficient) or matrix builds (comprehensive)
+5. **Package customization**: Removes unwanted packages and adds preferred alternatives
+6. **Maccel integration**: Builds and integrates the maccel driver from source
+7. **Automated builds**: GitHub Actions checks for upstream changes and builds automatically
+
+## Build Strategy Options
+
+Vespera supports two build strategies configured in `vespera-config.yaml`:
+
+### Single Build Strategy (Default)
+
+```yaml
+build:
+  strategy: "single"
+```
+
+**Behavior**:
+- Builds only the variant/GPU combination specified in your config
+- Produces one image with Aurora-style naming (e.g., `vespera-nvidia`)
+- Efficient resource usage - only builds what you need
+- Recommended for personal use
+
+**Example**: With `aurora` + `nvidia` config, produces `ghcr.io/username/vespera-nvidia:latest`
+
+### Matrix Build Strategy
+
+```yaml
+build:
+  strategy: "matrix"
+```
+
+**Behavior**:
+- Builds all 6 possible variant/GPU combinations in parallel
+- Produces: `vespera`, `vespera-nvidia`, `vespera-nvidia-open`, `vespera-dx`, `vespera-dx-nvidia`, `vespera-dx-nvidia-open`
+- Higher resource usage but provides complete coverage
+- Useful for projects supporting multiple configurations
+
+**Note**: Matrix builds are not yet implemented but the configuration option is reserved for future use.
 
 ## Multi-Stage Build Architecture
 
@@ -198,24 +234,36 @@ The automated build process consists of three jobs:
 
 **Steps**:
 1. Read Aurora variant and GPU variant from `vespera-config.yaml`
-2. Validate GPU variant (must be main, nvidia, or nvidia-open)
-3. Construct full Aurora image name with GPU variant support
-4. Check Aurora base image for new versions (using `skopeo inspect`)
-5. Check maccel repository for new commits (using `git ls-remote`)
-6. Compare with previous build metadata
-7. Decide whether to build based on:
-   - Force build flag (manual trigger)
-   - Push to main branch
-   - Aurora version change
-   - Maccel commit change
-   - GPU variant change
-   - No previous build metadata
+2. Read build strategy from `vespera-config.yaml` (single or matrix)
+3. Validate GPU variant (must be main, nvidia, or nvidia-open)
+4. Validate build strategy (must be single or matrix)
+5. Construct Aurora base image name with GPU variant support
+6. Construct Vespera image name following Aurora naming convention:
+   - `aurora` + `main` → `vespera`
+   - `aurora` + `nvidia` → `vespera-nvidia`
+   - `aurora` + `nvidia-open` → `vespera-nvidia-open`
+   - `aurora-dx` + `main` → `vespera-dx`
+   - `aurora-dx` + `nvidia` → `vespera-dx-nvidia`
+   - `aurora-dx` + `nvidia-open` → `vespera-dx-nvidia-open`
+7. Check Aurora base image for new versions (using `skopeo inspect`)
+8. Check maccel repository for new commits (using `git ls-remote`)
+9. Compare with previous build metadata from the specific image variant
+10. Decide whether to build based on:
+    - Force build flag (manual trigger)
+    - Push to main branch
+    - Aurora version change
+    - Maccel commit change
+    - GPU variant change
+    - Build strategy change
+    - No previous build metadata
 
 **Outputs**:
 - `should_build`: Boolean indicating if build is needed
 - `aurora_version`: Current Aurora image digest
 - `aurora_variant`: Aurora variant (aurora or aurora-dx)
 - `gpu_variant`: GPU variant (main, nvidia, or nvidia-open)
+- `build_strategy`: Build strategy (single or matrix)
+- `vespera_image_name`: Final Vespera image name (e.g., vespera-nvidia)
 - `maccel_commit`: Current maccel commit hash
 - `build_date`: Date stamp for tagging
 
@@ -253,15 +301,18 @@ buildah bud \
   --build-arg AURORA_VARIANT=${AURORA_VARIANT} \
   --build-arg GPU_VARIANT=${GPU_VARIANT} \
   --build-arg IMAGE_REGISTRY=${IMAGE_REGISTRY} \
-  --build-arg IMAGE_NAME=${IMAGE_NAME} \
+  --build-arg IMAGE_NAME=${GITHUB_REPOSITORY} \
   --tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:${STAGING_TAG} \
   --label "org.vespera.build.date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
   --label "org.vespera.aurora.variant=${AURORA_VARIANT}" \
   --label "org.vespera.gpu.variant=${GPU_VARIANT}" \
+  --label "org.vespera.image.variant=${VESPERA_IMAGE_NAME}" \
   --label "org.vespera.aurora.digest=${AURORA_DIGEST}" \
   --label "org.vespera.maccel.commit=${MACCEL_COMMIT}" \
   .
 ```
+
+Where `${IMAGE_NAME}` is dynamically constructed as `${GITHUB_REPOSITORY_OWNER}/${VESPERA_IMAGE_NAME}` (e.g., `username/vespera-nvidia`).
 
 **Why buildah?**
 - Native to Fedora ecosystem
@@ -275,15 +326,19 @@ buildah bud \
 **Runs**: Only if build succeeded
 
 **Steps**:
-1. Pull staging image for verification
+1. Pull staging image for verification using the dynamic image name
 2. **GPU Variant Verification**: Verify correct GPU variant configuration and labels
 3. **Maccel Verification**: Check kernel module, CLI binary, udev rules, group, and module loading config
 4. **Package Verification**: Verify RPM and Flatpak customizations were applied correctly
 5. Generate comprehensive verification summary
-6. Tag verified image with production tags (date, latest, GPU variant)
-7. Push all production tags to registry
+6. Tag verified image with production tags:
+   - `${BUILD_DATE}-${GPU_VARIANT}` (e.g., `20241026-nvidia`)
+   - `${BUILD_DATE}` (e.g., `20241026`)
+   - `latest`
+   - `${GPU_VARIANT}` (e.g., `nvidia`)
+7. Push all production tags to the variant-specific registry path
 8. Clean up staging tag using dummy image technique
-9. Generate build summary with pull and rebase commands
+9. Generate build summary with variant-specific pull and rebase commands
 10. Store comprehensive build metadata as JSON
 
 **Registry authentication**:
@@ -338,34 +393,49 @@ You can build Vespera locally for testing or development.
 git clone https://github.com/YOUR_USERNAME/vespera.git
 cd vespera
 
-# Build with podman
-podman build -t vespera:local -f Containerfile .
+# Build with default config (aurora + nvidia = vespera-nvidia)
+podman build -t vespera-nvidia:local -f Containerfile .
 
 # Or with docker
-docker build -t vespera:local -f Containerfile .
+docker build -t vespera-nvidia:local -f Containerfile .
 ```
 
-### Build with Specific Aurora Variant
+### Build with Specific Variants
 
 ```bash
-# Build with aurora-dx
+# Build aurora-dx with nvidia (produces vespera-dx-nvidia)
 podman build \
   --build-arg AURORA_VARIANT=aurora-dx \
-  -t vespera:local-dx \
+  --build-arg GPU_VARIANT=nvidia \
+  -t vespera-dx-nvidia:local \
+  -f Containerfile .
+
+# Build aurora with main GPU (produces vespera)
+podman build \
+  --build-arg AURORA_VARIANT=aurora \
+  --build-arg GPU_VARIANT=main \
+  -t vespera:local \
+  -f Containerfile .
+
+# Build aurora with nvidia-open (produces vespera-nvidia-open)
+podman build \
+  --build-arg AURORA_VARIANT=aurora \
+  --build-arg GPU_VARIANT=nvidia-open \
+  -t vespera-nvidia-open:local \
   -f Containerfile .
 ```
 
 ### Testing the Built Image
 
 ```bash
-# Check if maccel is present
-podman run --rm vespera:local /usr/local/bin/maccel --version
+# Check if maccel is present (adjust image name based on your build)
+podman run --rm vespera-nvidia:local /usr/local/bin/maccel --version
 
 # Check kernel module
-podman run --rm vespera:local ls -la /usr/lib/modules/*/extra/maccel/
+podman run --rm vespera-nvidia:local ls -la /usr/lib/modules/*/extra/maccel/
 
 # Interactive shell
-podman run --rm -it vespera:local /bin/bash
+podman run --rm -it vespera-nvidia:local /bin/bash
 ```
 
 ### Build Time Expectations

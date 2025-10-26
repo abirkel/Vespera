@@ -26,7 +26,7 @@ on:
 
 env:
   IMAGE_REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/vespera
+  # IMAGE_NAME will be set dynamically based on variant configuration
   AURORA_BASE_IMAGE: ghcr.io/ublue-os/aurora
   MACCEL_REPO: https://github.com/Gnarus-G/maccel
 
@@ -39,6 +39,8 @@ jobs:
       aurora_version: ${{ steps.check-aurora.outputs.version }}
       aurora_variant: ${{ steps.check-aurora.outputs.aurora_variant }}
       gpu_variant: ${{ steps.check-aurora.outputs.gpu_variant }}
+      build_strategy: ${{ steps.check-aurora.outputs.build_strategy }}
+      vespera_image_name: ${{ steps.check-aurora.outputs.vespera_image_name }}
       maccel_commit: ${{ steps.check-maccel.outputs.commit }}
       build_date: ${{ steps.date.outputs.date }}
     
@@ -59,16 +61,26 @@ jobs:
           # Get GPU variant from config
           GPU_VARIANT=$(yq eval '.base.gpu_variant // "nvidia"' vespera-config.yaml)
           
+          # Get build strategy from config
+          BUILD_STRATEGY=$(yq eval '.build.strategy // "single"' vespera-config.yaml)
+          
           # Validate GPU variant
           if [[ ! "$GPU_VARIANT" =~ ^(main|nvidia|nvidia-open)$ ]]; then
             echo "::error::Invalid GPU variant: $GPU_VARIANT. Must be one of: main, nvidia, nvidia-open"
             exit 1
           fi
           
+          # Validate build strategy
+          if [[ ! "$BUILD_STRATEGY" =~ ^(single|matrix)$ ]]; then
+            echo "::error::Invalid build strategy: $BUILD_STRATEGY. Must be one of: single, matrix"
+            exit 1
+          fi
+          
           echo "Aurora variant: ${AURORA_VARIANT}"
           echo "GPU variant: ${GPU_VARIANT}"
+          echo "Build strategy: ${BUILD_STRATEGY}"
           
-          # Construct full image name with GPU variant
+          # Construct Aurora base image name
           # Format: aurora-{gpu_variant} or aurora-dx-{gpu_variant}
           if [ "${AURORA_VARIANT}" = "aurora" ]; then
             FULL_IMAGE="${AURORA_BASE_IMAGE}-${GPU_VARIANT}"
@@ -77,19 +89,41 @@ jobs:
             FULL_IMAGE="${AURORA_BASE_IMAGE}-dx-${GPU_VARIANT}"
           fi
           
-          echo "Full image name: ${FULL_IMAGE}"
+          echo "Aurora base image: ${FULL_IMAGE}"
+          
+          # Construct Vespera image name following Aurora convention
+          BASE_IMAGE_NAME=$(yq eval '.build.image_name // "vespera"' vespera-config.yaml)
+          if [ "${AURORA_VARIANT}" = "aurora" ]; then
+            if [ "${GPU_VARIANT}" = "main" ]; then
+              VESPERA_IMAGE_NAME="${BASE_IMAGE_NAME}"  # vespera
+            else
+              VESPERA_IMAGE_NAME="${BASE_IMAGE_NAME}-${GPU_VARIANT}"  # vespera-nvidia, vespera-nvidia-open
+            fi
+          else
+            if [ "${GPU_VARIANT}" = "main" ]; then
+              VESPERA_IMAGE_NAME="${BASE_IMAGE_NAME}-dx"  # vespera-dx
+            else
+              VESPERA_IMAGE_NAME="${BASE_IMAGE_NAME}-dx-${GPU_VARIANT}"  # vespera-dx-nvidia, vespera-dx-nvidia-open
+            fi
+          fi
+          
+          echo "Vespera image name: ${VESPERA_IMAGE_NAME}"
           
           # Get latest Aurora image digest
           AURORA_DIGEST=$(skopeo inspect docker://${FULL_IMAGE}:latest | jq -r '.Digest')
           echo "version=${AURORA_DIGEST}" >> $GITHUB_OUTPUT
           echo "gpu_variant=${GPU_VARIANT}" >> $GITHUB_OUTPUT
           echo "aurora_variant=${AURORA_VARIANT}" >> $GITHUB_OUTPUT
+          echo "build_strategy=${BUILD_STRATEGY}" >> $GITHUB_OUTPUT
+          echo "vespera_image_name=${VESPERA_IMAGE_NAME}" >> $GITHUB_OUTPUT
           echo "Aurora digest: ${AURORA_DIGEST}"
           
           # Store for comparison
           echo "${AURORA_DIGEST}" > aurora-version.txt
           echo "${GPU_VARIANT}" > gpu-variant.txt
           echo "${AURORA_VARIANT}" > aurora-variant.txt
+          echo "${BUILD_STRATEGY}" > build-strategy.txt
+          echo "${VESPERA_IMAGE_NAME}" > vespera-image-name.txt
       
       - name: Check maccel repository for updates
         id: check-maccel
@@ -106,6 +140,10 @@ jobs:
         id: previous-metadata
         continue-on-error: true
         run: |
+          # Get image name from config
+          VESPERA_IMAGE_NAME=$(cat vespera-image-name.txt)
+          IMAGE_NAME="${{ github.repository_owner }}/${VESPERA_IMAGE_NAME}"
+          
           # Try to get previous build metadata from registry
           skopeo inspect docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:latest | jq -r '.Labels' > previous-metadata.json || echo "{}" > previous-metadata.json
           
@@ -181,6 +219,8 @@ jobs:
             aurora-version.txt
             aurora-variant.txt
             gpu-variant.txt
+            build-strategy.txt
+            vespera-image-name.txt
             maccel-commit.txt
 
   build-and-stage:
@@ -239,6 +279,10 @@ jobs:
           AURORA_VERSION="${{ needs.detect-changes.outputs.aurora_version }}"
           MACCEL_COMMIT="${{ needs.detect-changes.outputs.maccel_commit }}"
           GPU_VARIANT="${{ needs.detect-changes.outputs.gpu_variant }}"
+          VESPERA_IMAGE_NAME="${{ needs.detect-changes.outputs.vespera_image_name }}"
+          
+          # Set dynamic image name
+          IMAGE_NAME="${{ github.repository_owner }}/${VESPERA_IMAGE_NAME}"
           
           # Create short versions for tags
           AURORA_SHORT=$(echo ${AURORA_VERSION} | cut -c1-12)
@@ -253,6 +297,8 @@ jobs:
           echo "maccel_short=${MACCEL_SHORT}" >> $GITHUB_OUTPUT
           echo "gpu_tag=${GPU_TAG}" >> $GITHUB_OUTPUT
           echo "staging_tag=${STAGING_TAG}" >> $GITHUB_OUTPUT
+          echo "image_name=${IMAGE_NAME}" >> $GITHUB_OUTPUT
+          echo "vespera_image_name=${VESPERA_IMAGE_NAME}" >> $GITHUB_OUTPUT
       
       - name: Build and push staging image
         id: build
@@ -260,10 +306,14 @@ jobs:
           BUILD_DATE="${{ steps.vars.outputs.build_date }}"
           GPU_TAG="${{ steps.vars.outputs.gpu_tag }}"
           STAGING_TAG="${{ steps.vars.outputs.staging_tag }}"
+          IMAGE_NAME="${{ steps.vars.outputs.image_name }}"
+          VESPERA_IMAGE_NAME="${{ steps.vars.outputs.vespera_image_name }}"
           AURORA_VARIANT="${{ needs.detect-changes.outputs.aurora_variant }}"
           GPU_VARIANT="${{ needs.detect-changes.outputs.gpu_variant }}"
           
           echo "Building Vespera image..."
+          echo "- Image name: ${IMAGE_NAME}"
+          echo "- Vespera variant: ${VESPERA_IMAGE_NAME}"
           echo "- Aurora variant: ${AURORA_VARIANT}"
           echo "- GPU variant: ${GPU_VARIANT}"
           echo "- Build date: ${BUILD_DATE}"
@@ -281,6 +331,7 @@ jobs:
             --label "org.vespera.build.date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
             --label "org.vespera.aurora.variant=${AURORA_VARIANT}" \
             --label "org.vespera.gpu.variant=${GPU_VARIANT}" \
+            --label "org.vespera.image.variant=${VESPERA_IMAGE_NAME}" \
             --label "org.vespera.aurora.digest=${{ needs.detect-changes.outputs.aurora_version }}" \
             --label "org.vespera.maccel.commit=${{ needs.detect-changes.outputs.maccel_commit }}" \
             --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
@@ -300,7 +351,7 @@ jobs:
           echo "image_digest=${DIGEST}" >> $GITHUB_OUTPUT
           
           echo "Staging image pushed successfully:"
-          echo "- Tag: ${STAGING_TAG}"
+          echo "- Full name: ${IMAGE_REGISTRY}/${IMAGE_NAME}:${STAGING_TAG}"
           echo "- Digest: ${DIGEST}"
       
       - name: Upload build metadata
@@ -311,6 +362,8 @@ jobs:
             aurora-version.txt
             aurora-variant.txt
             gpu-variant.txt
+            build-strategy.txt
+            vespera-image-name.txt
             maccel-commit.txt
 
   verify-and-publish:
@@ -346,8 +399,10 @@ jobs:
       - name: Pull staging image for verification
         run: |
           STAGING_TAG="${{ needs.build-and-stage.outputs.staging_tag }}"
+          IMAGE_NAME="${{ github.repository_owner }}/${{ needs.detect-changes.outputs.vespera_image_name }}"
           
           echo "Pulling staging image for verification..."
+          echo "- Image: ${IMAGE_REGISTRY}/${IMAGE_NAME}"
           echo "- Staging tag: ${STAGING_TAG}"
           
           # Pull the staging image
@@ -361,6 +416,7 @@ jobs:
         run: |
           echo "Verifying GPU variant configuration..."
           
+          IMAGE_NAME="${{ github.repository_owner }}/${{ needs.detect-changes.outputs.vespera_image_name }}"
           EXPECTED_GPU_VARIANT="${{ needs.detect-changes.outputs.gpu_variant }}"
           AURORA_VARIANT="${{ needs.detect-changes.outputs.aurora_variant }}"
           
@@ -433,6 +489,8 @@ jobs:
         run: |
           echo "Checking for maccel kernel module..."
           
+          IMAGE_NAME="${{ github.repository_owner }}/${{ needs.detect-changes.outputs.vespera_image_name }}"
+          
           # Run container and check for kernel module files
           CONTAINER=$(buildah from ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify)
           
@@ -476,6 +534,7 @@ jobs:
         run: |
           echo "Checking for maccel CLI binary..."
           
+          IMAGE_NAME="${{ github.repository_owner }}/${{ needs.detect-changes.outputs.vespera_image_name }}"
           CONTAINER=$(buildah from ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify)
           
           if buildah run $CONTAINER test -f /usr/local/bin/maccel; then
@@ -501,6 +560,7 @@ jobs:
         run: |
           echo "Checking for maccel udev rules..."
           
+          IMAGE_NAME="${{ github.repository_owner }}/${{ needs.detect-changes.outputs.vespera_image_name }}"
           CONTAINER=$(buildah from ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify)
           
           UDEV_FOUND="false"
@@ -530,6 +590,7 @@ jobs:
         run: |
           echo "Checking for maccel group..."
           
+          IMAGE_NAME="${{ github.repository_owner }}/${{ needs.detect-changes.outputs.vespera_image_name }}"
           CONTAINER=$(buildah from ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify)
           
           if buildah run $CONTAINER getent group maccel > /dev/null 2>&1; then
@@ -548,6 +609,7 @@ jobs:
         run: |
           echo "Checking for module loading configuration..."
           
+          IMAGE_NAME="${{ github.repository_owner }}/${{ needs.detect-changes.outputs.vespera_image_name }}"
           CONTAINER=$(buildah from ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify)
           
           MODLOAD_FOUND="false"
@@ -580,6 +642,7 @@ jobs:
         run: |
           echo "Verifying RPM package customizations..."
           
+          IMAGE_NAME="${{ github.repository_owner }}/${{ needs.detect-changes.outputs.vespera_image_name }}"
           CONTAINER=$(buildah from ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify)
           
           # Get list of packages to remove from config
@@ -637,6 +700,7 @@ jobs:
         run: |
           echo "Verifying Flatpak customizations..."
           
+          IMAGE_NAME="${{ github.repository_owner }}/${{ needs.detect-changes.outputs.vespera_image_name }}"
           CONTAINER=$(buildah from ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify)
           
           # Get list of Flatpaks to remove from config
@@ -779,8 +843,10 @@ jobs:
           GPU_VARIANT="${{ needs.detect-changes.outputs.gpu_variant }}"
           STAGING_TAG="${{ needs.build-and-stage.outputs.staging_tag }}"
           GPU_TAG="${{ needs.build-and-stage.outputs.gpu_tag }}"
+          IMAGE_NAME="${{ github.repository_owner }}/${{ needs.detect-changes.outputs.vespera_image_name }}"
           
           echo "Verification passed! Publishing image..."
+          echo "- Image name: ${IMAGE_NAME}"
           echo "- Build date: ${BUILD_DATE}"
           echo "- GPU variant: ${GPU_VARIANT}"
           echo "- GPU tag: ${GPU_TAG}"
@@ -824,7 +890,7 @@ jobs:
           
           # Get the version ID of the dummy image using GitHub API
           echo "Getting dummy image version ID..."
-          PACKAGE_NAME="vespera"
+          PACKAGE_NAME="${{ needs.detect-changes.outputs.vespera_image_name }}"
           OWNER="${{ github.repository_owner }}"
           
           # List all versions and find the one with our staging tag
@@ -868,6 +934,7 @@ jobs:
           MACCEL_COMMIT="${{ needs.detect-changes.outputs.maccel_commit }}"
           IMAGE_DIGEST="${{ steps.push.outputs.digest }}"
           GPU_TAG="${{ needs.build-and-stage.outputs.gpu_tag }}"
+          IMAGE_NAME="${{ github.repository_owner }}/${{ needs.detect-changes.outputs.vespera_image_name }}"
           
           cat >> $GITHUB_STEP_SUMMARY << EOF
           # Vespera Build Summary
@@ -916,6 +983,7 @@ jobs:
           GPU_VARIANT="${{ needs.detect-changes.outputs.gpu_variant }}"
           MACCEL_COMMIT="${{ needs.detect-changes.outputs.maccel_commit }}"
           IMAGE_DIGEST="${{ steps.push.outputs.digest }}"
+          IMAGE_NAME="${{ github.repository_owner }}/${{ needs.detect-changes.outputs.vespera_image_name }}"
           
           # Create metadata JSON
           cat > build-metadata.json << EOF
