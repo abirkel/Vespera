@@ -1,0 +1,65 @@
+{
+  "default": [
+    {
+      "type": "reject"
+    }
+  ],
+  "transports": {
+    "docker": {
+      "ghcr.io/USERNAME/vespera": [
+        {
+          "type": "sigstoreSigned",
+          "keyless": {
+            "issuer": "https://token.actions.githubusercontent.com",
+            "subject": "https://github.com/USERNAME/vespera"
+          }
+        }
+      ],
+      "ghcr.io/USERNAME/vespera-nvidia": [
+        {
+          "type": "sigstoreSigned",
+          "keyless": {
+            "issuer": "https://token.actions.githubusercontent.com",
+            "subject": "https://github.com/USERNAME/vespera"
+          }
+        }
+      ],
+      "ghcr.io/USERNAME/vespera-nvidia-open": [
+        {
+          "type": "sigstoreSigned",
+          "keyless": {
+            "issuer": "https://token.actions.githubusercontent.com",
+            "subject": "https://github.com/USERNAME/vespera"
+          }
+        }
+      ],
+      "ghcr.io/USERNAME/vespera-dx": [
+        {
+          "type": "sigstoreSigned",
+          "keyless": {
+            "issuer": "https://token.actions.githubusercontent.com",
+            "subject": "https://github.com/USERNAME/vespera"
+          }
+        }
+      ],
+      "ghcr.io/USERNAME/vespera-dx-nvidia": [
+        {
+          "type": "sigstoreSigned",
+          "keyless": {
+            "issuer": "https://token.actions.githubusercontent.com",
+            "subject": "https://github.com/USERNAME/vespera"
+          }
+        }
+      ],
+      "ghcr.io/USERNAME/vespera-dx-nvidia-open": [
+        {
+          "type": "sigstoreSigned",
+          "keyless": {
+            "issuer": "https://token.actions.githubusercontent.com",
+            "subject": "https://github.com/USERNAME/vespera"
+          }
+        }
+      ]
+    }
+  }
+}

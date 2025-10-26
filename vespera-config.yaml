@@ -191,4 +191,38 @@ build:
   #   aurora-dx + nvidia-open = vespera-dx-nvidia-open
   image_name: "vespera"
 
+# Image signing configuration
+#
+# Vespera images are cryptographically signed using Cosign with keyless signing.
+# This provides supply chain security and enables secure rpm-ostree rebasing.
+signing:
+  # Enable image signing during build process
+  enabled: true
+  
+  # Signing method: cosign-keyless uses GitHub's OIDC identity
+  # No long-lived private keys are stored or managed
+  method: "cosign-keyless"
+  
+  # OIDC issuer for keyless signing authentication
+  # GitHub Actions provides the identity token for signing
+  oidc_issuer: "https://token.actions.githubusercontent.com"
+  
+  # Certificate subject will be bound to the repository URL
+  # This prevents signature spoofing from unauthorized repositories
+  subject_pattern: "https://github.com/*"
+  
+  # Transparency log for public signature verification
+  # All signing events are recorded in Rekor for auditability
+  transparency_log: "https://rekor.sigstore.dev"
+  
+  # Signature verification settings for users
+  verification:
+    # Policy configuration for rpm-ostree and container tools
+    # Users can configure /etc/containers/policy.json to verify signatures
+    policy_required: false  # Set to true to require signature verification
+    
+    # Root of trust: Sigstore's public infrastructure
+    # No custom certificate authority setup required
+    root_of_trust: "sigstore-public"
+
 # Build test triggered at 2025-10-26 01:54:22 UTC

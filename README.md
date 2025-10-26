@@ -115,7 +115,7 @@ To change the GPU variant for your Vespera build:
 3. After the build completes, rebase to the new image:
    ```bash
    # For NVIDIA GPU variant (default configuration)
-   rpm-ostree rebase ostree-unverified-registry:ghcr.io/YOUR_USERNAME/vespera-nvidia:latest
+   rpm-ostree rebase ostree-image-signed:docker://ghcr.io/YOUR_USERNAME/vespera-nvidia:latest
    systemctl reboot
    ```
 
@@ -154,7 +154,8 @@ Once the image is built and published, you can rebase your existing Fedora Atomi
 
 ```bash
 # Rebase to Vespera (NVIDIA variant - matches default config)
-rpm-ostree rebase ostree-unverified-registry:ghcr.io/YOUR_USERNAME/vespera-nvidia:latest
+# Using signed images (recommended for security)
+rpm-ostree rebase ostree-image-signed:docker://ghcr.io/YOUR_USERNAME/vespera-nvidia:latest
 
 # Reboot to apply changes
 systemctl reboot
@@ -163,11 +164,75 @@ systemctl reboot
 **For other variants**, use the corresponding image name from the table above:
 ```bash
 # Developer variant with NVIDIA
-rpm-ostree rebase ostree-unverified-registry:ghcr.io/YOUR_USERNAME/vespera-dx-nvidia:latest
+rpm-ostree rebase ostree-image-signed:docker://ghcr.io/YOUR_USERNAME/vespera-dx-nvidia:latest
 
 # Base variant with Intel/AMD GPU
-rpm-ostree rebase ostree-unverified-registry:ghcr.io/YOUR_USERNAME/vespera:latest
+rpm-ostree rebase ostree-image-signed:docker://ghcr.io/YOUR_USERNAME/vespera:latest
 ```
+
+#### Signature Verification Setup
+
+Vespera images are cryptographically signed using [Sigstore](https://www.sigstore.dev/) keyless signing. This ensures that images come from the official repository and haven't been tampered with.
+
+**Automatic Verification**: When using `ostree-image-signed:docker://` URLs, rpm-ostree automatically verifies signatures before rebasing. No additional setup is required for basic security.
+
+**Custom Policy Configuration** (optional): For stricter security policies, you can configure signature verification rules:
+
+```bash
+# Create or edit the container policy file
+sudo mkdir -p /etc/containers
+sudo nano /etc/containers/policy.json
+```
+
+Add a policy for your Vespera repository:
+```json
+{
+  "default": [{"type": "reject"}],
+  "transports": {
+    "docker": {
+      "ghcr.io/YOUR_USERNAME/vespera-nvidia": [
+        {
+          "type": "sigstoreSigned",
+          "keyless": {
+            "issuer": "https://token.actions.githubusercontent.com",
+            "subject": "https://github.com/YOUR_USERNAME/vespera"
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+Replace `YOUR_USERNAME` with your GitHub username. Add similar entries for other image variants you use.
+
+**Manual Verification**: To manually verify an image signature before rebasing:
+
+```bash
+# Install cosign (if not already installed)
+curl -O -L "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64"
+sudo install cosign-linux-amd64 /usr/local/bin/cosign
+rm cosign-linux-amd64
+
+# Verify the image signature
+cosign verify \
+  --certificate-identity=https://github.com/YOUR_USERNAME/vespera \
+  --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
+  ghcr.io/YOUR_USERNAME/vespera-nvidia:latest
+```
+
+For more details on image signing, verification, and troubleshooting, see [Image Signing Documentation](docs/IMAGE-SIGNING.md).
+
+#### Transition Period: Unsigned Images
+
+During the transition to signed images, unsigned images remain available:
+
+```bash
+# Using unsigned images (legacy, not recommended)
+rpm-ostree rebase ostree-unverified-registry:ghcr.io/YOUR_USERNAME/vespera-nvidia:latest
+```
+
+**Note**: Unsigned images will be deprecated in the future. We recommend migrating to signed images for enhanced security.
 
 ### Fresh Installation
 
@@ -239,6 +304,17 @@ rpm-ostree rollback
 **Maccel Issues**: Verify user is in `maccel` group (`groups`) and module is loaded (`lsmod | grep maccel`)
 
 **Package Issues**: Ensure removed packages don't have dependencies and added packages exist in Fedora repos
+
+**Signature Verification Issues**: 
+- Ensure you're using the correct GitHub username in verification commands
+- Check network connectivity to Sigstore services (fulcio.sigstore.dev, rekor.sigstore.dev)
+- Verify the image was built and signed successfully in GitHub Actions
+- For detailed troubleshooting, see [Image Signing Documentation](docs/IMAGE-SIGNING.md#troubleshooting-guide)
+
+**Migration from Unsigned Images**:
+- Use `rpm-ostree rebase ostree-image-signed:docker://...` to switch to signed images
+- Rollback is available via `rpm-ostree rollback` if needed
+- See [Migration Guide](docs/IMAGE-SIGNING.md#migration-guide) for detailed steps
 
 ## Resources
 

@@ -944,6 +944,7 @@ jobs:
           - **Image**: \`${IMAGE_REGISTRY}/${IMAGE_NAME}\`
           - **Tags**: \`${GPU_TAG}\`, \`${BUILD_DATE}\`, \`${GPU_VARIANT}\`, \`latest\`
           - **Digest**: \`${IMAGE_DIGEST}\`
+          - **Signing Status**: ⏳ Pending (will be signed in next job)
           
           ## Configuration
           - **Aurora Variant**: \`${AURORA_VARIANT}\`
@@ -965,14 +966,26 @@ jobs:
           podman pull ${IMAGE_REGISTRY}/${IMAGE_NAME}:latest
           \`\`\`
           
-          ## Rebase Commands
+          ## Rebase Commands (Signed Images - Recommended)
           \`\`\`bash
-          # Rebase to specific build
-          rpm-ostree rebase ostree-unverified-registry:${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_TAG}
+          # Rebase to specific build (signed)
+          rpm-ostree rebase ostree-image-signed:docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_TAG}
           
-          # Or rebase to GPU variant (always gets latest for that variant)
-          rpm-ostree rebase ostree-unverified-registry:${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_VARIANT}
+          # Or rebase to GPU variant (signed, always gets latest for that variant)
+          rpm-ostree rebase ostree-image-signed:docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_VARIANT}
+          
+          # Or rebase to latest (signed)
+          rpm-ostree rebase ostree-image-signed:docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:latest
           \`\`\`
+          
+          ## Fallback Commands (Unsigned - For Troubleshooting)
+          \`\`\`bash
+          # If signature verification fails, use unsigned URLs
+          rpm-ostree rebase ostree-unverified-registry:${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_TAG}
+          \`\`\`
+          
+          > **Note**: Images will be cryptographically signed after verification completes. 
+          > Use \`ostree-image-signed:\` URLs for automatic signature verification.
           EOF
       
       - name: Store build metadata
@@ -1004,7 +1017,17 @@ jobs:
               "registry": "${IMAGE_REGISTRY}",
               "name": "${IMAGE_NAME}",
               "tag": "${BUILD_DATE}",
-              "digest": "${IMAGE_DIGEST}"
+              "digest": "${IMAGE_DIGEST}",
+              "signed": false,
+              "signing_pending": true
+            },
+            "signing": {
+              "enabled": true,
+              "method": "cosign-keyless",
+              "issuer": "https://token.actions.githubusercontent.com",
+              "subject": "https://github.com/${{ github.repository }}",
+              "transparency_log": "https://rekor.sigstore.dev",
+              "status": "pending"
             },
             "github": {
               "repository": "${{ github.repository }}",
@@ -1021,3 +1044,204 @@ jobs:
         with:
           name: final-build-metadata
           path: build-metadata.json
+
+  sign-images:
+    name: Sign Container Images
+    runs-on: ubuntu-latest
+    needs: [detect-changes, verify-and-publish]
+    if: needs.detect-changes.outputs.should_build == 'true'
+    permissions:
+      contents: read
+      packages: write
+      id-token: write  # Required for OIDC token for keyless signing
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Download build metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: build-metadata
+      
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.4.0
+        with:
+          cosign-release: 'v2.2.3'
+      
+      - name: Verify Cosign installation
+        run: |
+          echo "Verifying Cosign installation..."
+          cosign version
+          echo "✓ Cosign installed successfully"
+      
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.IMAGE_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Sign container images
+        run: |
+          BUILD_DATE="${{ needs.detect-changes.outputs.build_date }}"
+          GPU_VARIANT="${{ needs.detect-changes.outputs.gpu_variant }}"
+          IMAGE_NAME="${{ github.repository_owner }}/${{ needs.detect-changes.outputs.vespera_image_name }}"
+          GPU_TAG="${BUILD_DATE}-${GPU_VARIANT}"
+          
+          echo "Signing Vespera container images..."
+          echo "- Image: ${IMAGE_REGISTRY}/${IMAGE_NAME}"
+          echo "- GPU variant: ${GPU_VARIANT}"
+          
+          # Get image digest for immutable reference
+          DIGEST=$(skopeo inspect docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:latest | jq -r '.Digest')
+          echo "- Image digest: ${DIGEST}"
+          
+          # Define all production tags to sign
+          TAGS=(
+            "latest"
+            "${BUILD_DATE}"
+            "${GPU_VARIANT}"
+            "${GPU_TAG}"
+          )
+          
+          echo ""
+          echo "Signing all production tags..."
+          
+          # Sign each tag using the digest reference
+          for TAG in "${TAGS[@]}"; do
+            echo ""
+            echo "Signing tag: ${TAG}"
+            
+            # Retry logic for signing
+            MAX_RETRIES=3
+            RETRY_COUNT=0
+            SIGNED=false
+            
+            while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$SIGNED" = "false" ]; do
+              if [ $RETRY_COUNT -gt 0 ]; then
+                echo "Retry attempt $RETRY_COUNT of $MAX_RETRIES..."
+                sleep 5
+              fi
+              
+              if cosign sign --yes \
+                --oidc-issuer=https://token.actions.githubusercontent.com \
+                --oidc-client-id=sigstore \
+                ${IMAGE_REGISTRY}/${IMAGE_NAME}@${DIGEST}; then
+                echo "✓ Successfully signed ${TAG}"
+                SIGNED=true
+              else
+                RETRY_COUNT=$((RETRY_COUNT + 1))
+                if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                  echo "⚠ Signing failed, retrying..."
+                fi
+              fi
+            done
+            
+            if [ "$SIGNED" = "false" ]; then
+              echo "::error::Failed to sign tag ${TAG} after ${MAX_RETRIES} attempts"
+              exit 1
+            fi
+          done
+          
+          echo ""
+          echo "✅ All production tags signed successfully"
+          
+          # Store digest for verification step
+          echo "${DIGEST}" > image-digest.txt
+      
+      - name: Verify signatures
+        run: |
+          IMAGE_NAME="${{ github.repository_owner }}/${{ needs.detect-changes.outputs.vespera_image_name }}"
+          DIGEST=$(cat image-digest.txt)
+          EXPECTED_IDENTITY="https://github.com/${{ github.repository }}"
+          EXPECTED_ISSUER="https://token.actions.githubusercontent.com"
+          
+          echo "Verifying image signatures..."
+          echo "- Image: ${IMAGE_REGISTRY}/${IMAGE_NAME}@${DIGEST}"
+          echo "- Expected identity: ${EXPECTED_IDENTITY}"
+          echo "- Expected issuer: ${EXPECTED_ISSUER}"
+          echo ""
+          
+          # Verify signature with certificate identity check
+          if cosign verify \
+            --certificate-identity="${EXPECTED_IDENTITY}" \
+            --certificate-oidc-issuer="${EXPECTED_ISSUER}" \
+            ${IMAGE_REGISTRY}/${IMAGE_NAME}@${DIGEST} > verification-output.json; then
+            echo "✅ Signature verification successful"
+            
+            # Display certificate details
+            echo ""
+            echo "Certificate details:"
+            jq -r '.[0].optional.Bundle.Payload.body' verification-output.json | base64 -d | jq .
+            
+            # Extract and display Rekor log information
+            echo ""
+            echo "Transparency log information:"
+            REKOR_LOG_INDEX=$(jq -r '.[0].optional.Bundle.Payload.logIndex' verification-output.json)
+            echo "- Rekor log index: ${REKOR_LOG_INDEX}"
+            echo "- Rekor log URL: https://rekor.sigstore.dev/api/v1/log/entries?logIndex=${REKOR_LOG_INDEX}"
+            
+            # Store for summary
+            echo "${REKOR_LOG_INDEX}" > rekor-log-index.txt
+          else
+            echo "::error::Signature verification failed"
+            echo "Verification output:"
+            cat verification-output.json || echo "No output file"
+            exit 1
+          fi
+      
+      - name: Generate signing summary
+        run: |
+          BUILD_DATE="${{ needs.detect-changes.outputs.build_date }}"
+          GPU_VARIANT="${{ needs.detect-changes.outputs.gpu_variant }}"
+          IMAGE_NAME="${{ github.repository_owner }}/${{ needs.detect-changes.outputs.vespera_image_name }}"
+          GPU_TAG="${BUILD_DATE}-${GPU_VARIANT}"
+          DIGEST=$(cat image-digest.txt)
+          REKOR_LOG_INDEX=$(cat rekor-log-index.txt)
+          EXPECTED_IDENTITY="https://github.com/${{ github.repository }}"
+          
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          # Image Signing Summary
+          
+          ## Signed Image
+          - **Image**: \`${IMAGE_REGISTRY}/${IMAGE_NAME}\`
+          - **Digest**: \`${DIGEST}\`
+          
+          ## Signed Tags
+          - \`latest\`
+          - \`${BUILD_DATE}\`
+          - \`${GPU_VARIANT}\`
+          - \`${GPU_TAG}\`
+          
+          ## Signature Details
+          - **Certificate Identity**: \`${EXPECTED_IDENTITY}\`
+          - **OIDC Issuer**: \`https://token.actions.githubusercontent.com\`
+          - **Rekor Log Index**: [\`${REKOR_LOG_INDEX}\`](https://rekor.sigstore.dev/api/v1/log/entries?logIndex=${REKOR_LOG_INDEX})
+          
+          ## Verification Status
+          ✅ All signatures verified successfully
+          
+          ## Using Signed Images
+          
+          ### Rebase to Signed Image
+          \`\`\`bash
+          # Rebase to specific build (signed)
+          rpm-ostree rebase ostree-image-signed:docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_TAG}
+          
+          # Or rebase to GPU variant (signed, always gets latest for that variant)
+          rpm-ostree rebase ostree-image-signed:docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_VARIANT}
+          
+          # Or rebase to latest (signed)
+          rpm-ostree rebase ostree-image-signed:docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:latest
+          \`\`\`
+          
+          ### Manual Signature Verification
+          \`\`\`bash
+          # Verify signature with cosign
+          cosign verify \\
+            --certificate-identity="${EXPECTED_IDENTITY}" \\
+            --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \\
+            ${IMAGE_REGISTRY}/${IMAGE_NAME}@${DIGEST}
+          \`\`\`
+          EOF

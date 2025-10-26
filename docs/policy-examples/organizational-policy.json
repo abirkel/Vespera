@@ -1,0 +1,41 @@
+{
+  "default": [
+    {
+      "type": "reject"
+    }
+  ],
+  "transports": {
+    "docker": {
+      "ghcr.io": [
+        {
+          "type": "sigstoreSigned",
+          "keyless": {
+            "issuer": "https://token.actions.githubusercontent.com",
+            "subjectRegExp": "^https://github\\.com/ORGANIZATION/.*$"
+          }
+        }
+      ],
+      "registry.redhat.io": [
+        {
+          "type": "signedBy",
+          "keyType": "GPGKeys",
+          "keyPath": "/etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release"
+        }
+      ],
+      "quay.io": [
+        {
+          "type": "sigstoreSigned",
+          "keyless": {
+            "issuer": "https://token.actions.githubusercontent.com",
+            "subjectRegExp": "^https://github\\.com/ORGANIZATION/.*$"
+          }
+        }
+      ],
+      "docker.io": [
+        {
+          "type": "insecureAcceptAnything"
+        }
+      ]
+    }
+  }
+}

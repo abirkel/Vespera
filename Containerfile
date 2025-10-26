@@ -110,6 +110,13 @@ LABEL org.opencontainers.image.source="https://github.com/${IMAGE_NAME}"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.vendor="Vespera Project"
 
+# Signing metadata labels
+LABEL org.vespera.signing.enabled="true"
+LABEL org.vespera.signing.method="cosign-keyless"
+LABEL org.vespera.signing.issuer="https://token.actions.githubusercontent.com"
+LABEL org.vespera.signing.subject="https://github.com/${IMAGE_NAME}"
+LABEL org.vespera.signing.transparency_log="https://rekor.sigstore.dev"
+
 # Copy configuration file
 COPY vespera-config.yaml /tmp/vespera-config.yaml
 
