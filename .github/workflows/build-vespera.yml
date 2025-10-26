@@ -1154,7 +1154,7 @@ jobs:
         run: |
           IMAGE_NAME="${{ github.repository_owner }}/${{ needs.detect-changes.outputs.vespera_image_name }}"
           DIGEST=$(cat image-digest.txt)
-          EXPECTED_IDENTITY="https://github.com/${{ github.repository }}"
+          EXPECTED_IDENTITY="https://github.com/${{ github.repository }}/.github/workflows/build-vespera.yml@refs/heads/${{ github.ref_name }}"
           EXPECTED_ISSUER="https://token.actions.githubusercontent.com"
           
           echo "Verifying image signatures..."
@@ -1199,7 +1199,7 @@ jobs:
           GPU_TAG="${BUILD_DATE}-${GPU_VARIANT}"
           DIGEST=$(cat image-digest.txt)
           REKOR_LOG_INDEX=$(cat rekor-log-index.txt)
-          EXPECTED_IDENTITY="https://github.com/${{ github.repository }}"
+          EXPECTED_IDENTITY="https://github.com/${{ github.repository }}/.github/workflows/build-vespera.yml@refs/heads/${{ github.ref_name }}"
           
           cat >> $GITHUB_STEP_SUMMARY << EOF
           # Image Signing Summary

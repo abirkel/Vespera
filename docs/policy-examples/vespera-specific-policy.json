@@ -11,7 +11,7 @@
           "type": "sigstoreSigned",
           "keyless": {
             "issuer": "https://token.actions.githubusercontent.com",
-            "subject": "https://github.com/USERNAME/vespera"
+            "subject": "https://github.com/USERNAME/vespera/.github/workflows/build-vespera.yml@refs/heads/master"
           }
         }
       ],
@@ -20,7 +20,7 @@
           "type": "sigstoreSigned",
           "keyless": {
             "issuer": "https://token.actions.githubusercontent.com",
-            "subject": "https://github.com/USERNAME/vespera"
+            "subject": "https://github.com/USERNAME/vespera/.github/workflows/build-vespera.yml@refs/heads/master"
           }
         }
       ],
@@ -29,7 +29,7 @@
           "type": "sigstoreSigned",
           "keyless": {
             "issuer": "https://token.actions.githubusercontent.com",
-            "subject": "https://github.com/USERNAME/vespera"
+            "subject": "https://github.com/USERNAME/vespera/.github/workflows/build-vespera.yml@refs/heads/master"
           }
         }
       ],
@@ -38,7 +38,7 @@
           "type": "sigstoreSigned",
           "keyless": {
             "issuer": "https://token.actions.githubusercontent.com",
-            "subject": "https://github.com/USERNAME/vespera"
+            "subject": "https://github.com/USERNAME/vespera/.github/workflows/build-vespera.yml@refs/heads/master"
           }
         }
       ],
@@ -47,7 +47,7 @@
           "type": "sigstoreSigned",
           "keyless": {
             "issuer": "https://token.actions.githubusercontent.com",
-            "subject": "https://github.com/USERNAME/vespera"
+            "subject": "https://github.com/USERNAME/vespera/.github/workflows/build-vespera.yml@refs/heads/master"
           }
         }
       ],
@@ -56,7 +56,7 @@
           "type": "sigstoreSigned",
           "keyless": {
             "issuer": "https://token.actions.githubusercontent.com",
-            "subject": "https://github.com/USERNAME/vespera"
+            "subject": "https://github.com/USERNAME/vespera/.github/workflows/build-vespera.yml@refs/heads/master"
           }
         }
       ]
