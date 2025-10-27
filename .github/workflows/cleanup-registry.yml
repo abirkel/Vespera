@@ -1,18 +1,23 @@
 name: Cleanup Registry
 
 on:
-  # Run daily at 3 AM UTC
+  # Run weekly on Sundays at 3 AM UTC
   schedule:
-    - cron: '0 3 * * *'
+    - cron: '0 3 * * 0'
   
   # Manual trigger
   workflow_dispatch:
     inputs:
-      max_age_days:
+      staging_max_age_days:
         description: 'Maximum age in days for staging images to keep'
         required: false
         type: number
         default: 7
+      prod_max_age_days:
+        description: 'Maximum age in days for production images to keep'
+        required: false
+        type: number
+        default: 60
       dry_run:
         description: 'Dry run - show what would be deleted without actually deleting'
         required: false
@@ -33,27 +38,89 @@ jobs:
         with:
           account: user  # Use "user" for personal accounts
           token: ${{ secrets.GITHUB_TOKEN }}
-          image-names: vespera
+          image-names: vespera,vespera-nvidia,vespera-nvidia-open,vespera-dx,vespera-dx-nvidia,vespera-dx-nvidia-open
           image-tags: staging-*  # Target any image that has a tag starting with "staging-"
-          cut-off: ${{ github.event.inputs.max_age_days || '7' }}d
+          cut-off: ${{ github.event.inputs.staging_max_age_days || '7' }}d
           dry-run: ${{ github.event.inputs.dry_run || false }}
+
+  cleanup-production-images:
+    name: Delete old production images
+    runs-on: ubuntu-latest
+    needs: cleanup-staging-images  # Run after staging cleanup
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: Delete old date-based production images
+        uses: snok/container-retention-policy@v3.0.0
+        with:
+          account: user  # Use "user" for personal accounts
+          token: ${{ secrets.GITHUB_TOKEN }}
+          image-names: vespera,vespera-nvidia,vespera-nvidia-open,vespera-dx,vespera-dx-nvidia,vespera-dx-nvidia-open
+          image-tags: "20*"  # Date-based tags (YYYYMMDD and YYYYMMDD-variant formats)
+          cut-off: ${{ github.event.inputs.prod_max_age_days || '60' }}d
+          dry-run: ${{ github.event.inputs.dry_run || false }}
+          keep-n-most-recent: 5  # Always keep 5 most recent regardless of age
       
-      - name: Generate cleanup report
+      - name: Generate staging cleanup report
         run: |
           DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
-          MAX_AGE_DAYS="${{ github.event.inputs.max_age_days || '7' }}"
+          STAGING_MAX_AGE_DAYS="${{ github.event.inputs.staging_max_age_days || '7' }}"
           
           cat >> $GITHUB_STEP_SUMMARY << EOF
           # Registry Cleanup Report
           
-          ## Cleanup Configuration
-          - **Max Age**: ${MAX_AGE_DAYS} days
+          ## Staging Images Cleanup
+          - **Max Age**: ${STAGING_MAX_AGE_DAYS} days
           - **Mode**: $([ "$DRY_RUN" = "true" ] && echo "Dry Run" || echo "Live Cleanup")
           - **Date**: $(date -u +'%Y-%m-%d %H:%M:%S UTC')
-          - **Filter**: staging-* tags only
+          - **Filter**: staging-* tags
+          - **Variants**: All image variants
           
-          ## Cleanup Actions
-          See job logs above for detailed cleanup actions performed by container-retention-policy.
+          ## Staging Cleanup Actions
+          See job logs above for detailed staging cleanup actions performed by container-retention-policy.
+          EOF
+
+  generate-final-report:
+    name: Generate final cleanup report
+    runs-on: ubuntu-latest
+    needs: [cleanup-staging-images, cleanup-production-images]
+    if: always()  # Run even if previous jobs fail
+    
+    steps:
+      - name: Generate final cleanup report
+        run: |
+          DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
+          STAGING_MAX_AGE_DAYS="${{ github.event.inputs.staging_max_age_days || '7' }}"
+          PROD_MAX_AGE_DAYS="${{ github.event.inputs.prod_max_age_days || '60' }}"
           
-          $([ "$DRY_RUN" = "true" ] && echo "**Note**: This was a dry run. No images were actually deleted." || echo "**Note**: Live cleanup was performed.")
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          
+          ## Production Images Cleanup
+          - **Max Age**: ${PROD_MAX_AGE_DAYS} days (2+ months)
+          - **Mode**: $([ "$DRY_RUN" = "true" ] && echo "Dry Run" || echo "Live Cleanup")
+          - **Filter**: Date-based tags (20* pattern)
+          - **Variants**: All image variants
+          - **Safety**: Always keep 5 most recent images
+          - **Preserved**: latest tags (always current), GPU variant tags for base images only
+          
+          ## Production Cleanup Actions
+          See production cleanup job logs above for detailed actions performed.
+          
+          ## Summary
+          - **Staging Images**: Cleaned up staging-* tags older than ${STAGING_MAX_AGE_DAYS} days
+          - **Production Images**: Cleaned up date-based tags older than ${PROD_MAX_AGE_DAYS} days
+          - **Signature Artifacts**: Associated SHA256 signature artifacts automatically cleaned up
+          - **Schedule**: Runs weekly on Sundays at 3 AM UTC
+          
+          $([ "$DRY_RUN" = "true" ] && echo "**Note**: This was a dry run. No images were actually deleted." || echo "**Note**: Live cleanup was performed on both staging and production images.")
+          
+          ## Image Variants Cleaned
+          - vespera (main variant)
+          - vespera-nvidia (NVIDIA variant)
+          - vespera-nvidia-open (NVIDIA open-source variant)
+          - vespera-dx (developer variant)
+          - vespera-dx-nvidia (developer NVIDIA variant)
+          - vespera-dx-nvidia-open (developer NVIDIA open-source variant)
           EOF

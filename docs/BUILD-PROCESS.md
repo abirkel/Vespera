@@ -331,11 +331,10 @@ Where `${IMAGE_NAME}` is dynamically constructed as `${GITHUB_REPOSITORY_OWNER}/
 3. **Maccel Verification**: Check kernel module, CLI binary, udev rules, group, and module loading config
 4. **Package Verification**: Verify RPM and Flatpak customizations were applied correctly
 5. Generate comprehensive verification summary
-6. Tag verified image with production tags:
-   - `${BUILD_DATE}-${GPU_VARIANT}` (e.g., `20241026-nvidia`)
+6. Tag verified image with production tags (simplified):
+   - `latest` (most recent build)
    - `${BUILD_DATE}` (e.g., `20241026`)
-   - `latest`
-   - `${GPU_VARIANT}` (e.g., `nvidia`)
+   - `${GPU_VARIANT}` (e.g., `main`) - **only for base image** where image name doesn't specify variant
 7. Push all production tags to the variant-specific registry path
 8. Clean up staging tag using dummy image technique
 9. Generate build summary with variant-specific pull and rebase commands

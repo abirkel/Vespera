@@ -482,9 +482,10 @@ See the [Troubleshooting Guide](IMAGE-SIGNING.md#troubleshooting-guide) section 
    skopeo list-tags docker://ghcr.io/YOUR_USERNAME/vespera-nvidia
    ```
 
-2. **Check image name matches your configuration**:
+2. **Check image name and tags**:
    - Review `vespera-config.yaml` for correct variant and GPU settings
    - Verify image name follows naming convention (see README.md)
+   - **Note**: Vespera uses simplified tagging - variant-specific images (e.g., `vespera-nvidia`) only have `latest` and date-based tags, not redundant variant tags
 
 3. **Ensure build completed successfully**:
    - Check GitHub Actions workflow status

@@ -842,32 +842,38 @@ jobs:
           BUILD_DATE="${{ needs.detect-changes.outputs.build_date }}"
           GPU_VARIANT="${{ needs.detect-changes.outputs.gpu_variant }}"
           STAGING_TAG="${{ needs.build-and-stage.outputs.staging_tag }}"
-          GPU_TAG="${{ needs.build-and-stage.outputs.gpu_tag }}"
           IMAGE_NAME="${{ github.repository_owner }}/${{ needs.detect-changes.outputs.vespera_image_name }}"
+          VESPERA_IMAGE_NAME="${{ needs.detect-changes.outputs.vespera_image_name }}"
           
           echo "Verification passed! Publishing image..."
           echo "- Image name: ${IMAGE_NAME}"
           echo "- Build date: ${BUILD_DATE}"
           echo "- GPU variant: ${GPU_VARIANT}"
-          echo "- GPU tag: ${GPU_TAG}"
           
           # Tag the verified staging image with production tags
-          buildah tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_TAG}
-          buildah tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify ${IMAGE_REGISTRY}/${IMAGE_NAME}:${BUILD_DATE}
+          # Always tag with latest and date
           buildah tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify ${IMAGE_REGISTRY}/${IMAGE_NAME}:latest
-          buildah tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_VARIANT}
+          buildah tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify ${IMAGE_REGISTRY}/${IMAGE_NAME}:${BUILD_DATE}
           
-          # Push all production tags
-          buildah push ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_TAG}
-          buildah push ${IMAGE_REGISTRY}/${IMAGE_NAME}:${BUILD_DATE}
+          # Only add GPU variant tag for base image (where image name doesn't specify variant)
+          if [ "${VESPERA_IMAGE_NAME}" = "vespera" ]; then
+            buildah tag ${IMAGE_REGISTRY}/${IMAGE_NAME}:verify ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_VARIANT}
+            echo "Added GPU variant tag for base image: ${GPU_VARIANT}"
+          fi
+          
+          # Push production tags
           buildah push ${IMAGE_REGISTRY}/${IMAGE_NAME}:latest
-          buildah push ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_VARIANT}
+          buildah push ${IMAGE_REGISTRY}/${IMAGE_NAME}:${BUILD_DATE}
           
           echo "Production images pushed successfully:"
-          echo "- ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_TAG}"
-          echo "- ${IMAGE_REGISTRY}/${IMAGE_NAME}:${BUILD_DATE}"
           echo "- ${IMAGE_REGISTRY}/${IMAGE_NAME}:latest"
-          echo "- ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_VARIANT}"
+          echo "- ${IMAGE_REGISTRY}/${IMAGE_NAME}:${BUILD_DATE}"
+          
+          # Push GPU variant tag if it was created
+          if [ "${VESPERA_IMAGE_NAME}" = "vespera" ]; then
+            buildah push ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_VARIANT}
+            echo "- ${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_VARIANT}"
+          fi
           
           # Get image digest
           DIGEST=$(skopeo inspect docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:latest | jq -r '.Digest')
@@ -942,7 +948,7 @@ jobs:
           ## Build Information
           - **Build Date**: ${BUILD_DATE}
           - **Image**: \`${IMAGE_REGISTRY}/${IMAGE_NAME}\`
-          - **Tags**: \`${GPU_TAG}\`, \`${BUILD_DATE}\`, \`${GPU_VARIANT}\`, \`latest\`
+          - **Tags**: \`latest\`, \`${BUILD_DATE}\`$([ "${VESPERA_IMAGE_NAME}" = "vespera" ] && echo ", \`${GPU_VARIANT}\`" || echo "")
           - **Digest**: \`${IMAGE_DIGEST}\`
           - **Signing Status**: ⏳ Pending (will be signed in next job)
           
@@ -969,19 +975,19 @@ jobs:
           ## Rebase Commands (Signed Images - Recommended)
           \`\`\`bash
           # Rebase to specific build (signed)
-          rpm-ostree rebase ostree-image-signed:docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_TAG}
-          
-          # Or rebase to GPU variant (signed, always gets latest for that variant)
-          rpm-ostree rebase ostree-image-signed:docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_VARIANT}
+          rpm-ostree rebase ostree-image-signed:docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:${BUILD_DATE}
           
           # Or rebase to latest (signed)
           rpm-ostree rebase ostree-image-signed:docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:latest
+          $([ "${VESPERA_IMAGE_NAME}" = "vespera" ] && echo "
+          # Or rebase to GPU variant (signed, for base image only)
+          rpm-ostree rebase ostree-image-signed:docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_VARIANT}" || echo "")
           \`\`\`
           
           ## Fallback Commands (Unsigned - For Troubleshooting)
           \`\`\`bash
           # If signature verification fails, use unsigned URLs
-          rpm-ostree rebase ostree-unverified-registry:${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_TAG}
+          rpm-ostree rebase ostree-unverified-registry:${IMAGE_REGISTRY}/${IMAGE_NAME}:${BUILD_DATE}
           \`\`\`
           
           > **Note**: Images will be cryptographically signed after verification completes. 
@@ -1097,13 +1103,15 @@ jobs:
           DIGEST=$(skopeo inspect docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:latest | jq -r '.Digest')
           echo "- Image digest: ${DIGEST}"
           
-          # Define all production tags to sign
-          TAGS=(
-            "latest"
-            "${BUILD_DATE}"
-            "${GPU_VARIANT}"
-            "${GPU_TAG}"
-          )
+          # Define production tags to sign (simplified - no redundant variant tags)
+          TAGS=("latest" "${BUILD_DATE}")
+          
+          # Only add GPU variant tag for base image (where image name doesn't specify variant)
+          VESPERA_IMAGE_NAME="${{ needs.detect-changes.outputs.vespera_image_name }}"
+          if [ "${VESPERA_IMAGE_NAME}" = "vespera" ]; then
+            TAGS+=("${GPU_VARIANT}")
+            echo "Added GPU variant tag for signing: ${GPU_VARIANT}"
+          fi
           
           echo ""
           echo "Signing all production tags..."
@@ -1211,8 +1219,7 @@ jobs:
           ## Signed Tags
           - \`latest\`
           - \`${BUILD_DATE}\`
-          - \`${GPU_VARIANT}\`
-          - \`${GPU_TAG}\`
+          $([ "${VESPERA_IMAGE_NAME}" = "vespera" ] && echo "- \`${GPU_VARIANT}\` (base image only)" || echo "")
           
           ## Signature Details
           - **Certificate Identity**: \`${EXPECTED_IDENTITY}\`
@@ -1227,13 +1234,13 @@ jobs:
           ### Rebase to Signed Image
           \`\`\`bash
           # Rebase to specific build (signed)
-          rpm-ostree rebase ostree-image-signed:docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_TAG}
-          
-          # Or rebase to GPU variant (signed, always gets latest for that variant)
-          rpm-ostree rebase ostree-image-signed:docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_VARIANT}
+          rpm-ostree rebase ostree-image-signed:docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:${BUILD_DATE}
           
           # Or rebase to latest (signed)
           rpm-ostree rebase ostree-image-signed:docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:latest
+          $([ "${VESPERA_IMAGE_NAME}" = "vespera" ] && echo "
+          # Or rebase to GPU variant (signed, for base image only)
+          rpm-ostree rebase ostree-image-signed:docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:${GPU_VARIANT}" || echo "")
           \`\`\`
           
           ### Manual Signature Verification

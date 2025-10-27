@@ -119,6 +119,15 @@ The variant combination also determines your final Vespera image name following 
 
 All Vespera features (package customization, maccel integration, etc.) work identically across all GPU variants. The only difference is the underlying GPU driver stack.
 
+### Image Tagging Strategy
+
+Vespera follows a simplified tagging strategy similar to Aurora:
+
+- **Variant-specific images** (e.g., `vespera-nvidia`, `vespera-dx-nvidia`): Only tagged with `latest` and date-based tags (e.g., `20241026`)
+- **Base image** (`vespera`): Tagged with `latest`, date-based tags, and GPU variant tag (e.g., `main`)
+
+This eliminates redundant tags like `nvidia` on `vespera-nvidia` images since the image name already specifies the variant.
+
 #### Changing GPU Variants
 
 To switch GPU variants:
