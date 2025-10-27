@@ -34,6 +34,7 @@ jobs:
     
     steps:
       - name: Delete old staging images
+        id: cleanup-staging
         uses: snok/container-retention-policy@v3.0.0
         with:
           account: user  # Use "user" for personal accounts
@@ -42,6 +43,7 @@ jobs:
           image-tags: staging-*  # Target any image that has a tag starting with "staging-"
           cut-off: ${{ github.event.inputs.staging_max_age_days || '7' }}d
           dry-run: ${{ github.event.inputs.dry_run || false }}
+        continue-on-error: true  # Don't fail if some packages don't exist
 
   cleanup-production-images:
     name: Delete old production images
@@ -53,6 +55,7 @@ jobs:
     
     steps:
       - name: Delete old date-based production images
+        id: cleanup-production
         uses: snok/container-retention-policy@v3.0.0
         with:
           account: user  # Use "user" for personal accounts
@@ -62,11 +65,14 @@ jobs:
           cut-off: ${{ github.event.inputs.prod_max_age_days || '60' }}d
           dry-run: ${{ github.event.inputs.dry_run || false }}
           keep-n-most-recent: 5  # Always keep 5 most recent regardless of age
+        continue-on-error: true  # Don't fail if some packages don't exist
       
       - name: Generate staging cleanup report
+        if: always()  # Run even if cleanup step failed
         run: |
           DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
           STAGING_MAX_AGE_DAYS="${{ github.event.inputs.staging_max_age_days || '7' }}"
+          STAGING_RESULT="${{ steps.cleanup-staging.outcome || 'unknown' }}"
           
           cat >> $GITHUB_STEP_SUMMARY << EOF
           # Registry Cleanup Report
@@ -76,10 +82,13 @@ jobs:
           - **Mode**: $([ "$DRY_RUN" = "true" ] && echo "Dry Run" || echo "Live Cleanup")
           - **Date**: $(date -u +'%Y-%m-%d %H:%M:%S UTC')
           - **Filter**: staging-* tags
-          - **Variants**: All image variants
+          - **Variants**: All configured variants (some may not exist)
+          - **Status**: ${STAGING_RESULT}
           
           ## Staging Cleanup Actions
           See job logs above for detailed staging cleanup actions performed by container-retention-policy.
+          $([ "${STAGING_RESULT}" != "success" ] && echo "
+          **Note**: Some cleanup operations may have been skipped if packages don't exist yet." || echo "")
           EOF
 
   generate-final-report:
@@ -94,6 +103,8 @@ jobs:
           DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
           STAGING_MAX_AGE_DAYS="${{ github.event.inputs.staging_max_age_days || '7' }}"
           PROD_MAX_AGE_DAYS="${{ github.event.inputs.prod_max_age_days || '60' }}"
+          STAGING_RESULT="${{ needs.cleanup-staging-images.outputs.cleanup-staging.outcome || 'unknown' }}"
+          PRODUCTION_RESULT="${{ needs.cleanup-production-images.outputs.cleanup-production.outcome || 'unknown' }}"
           
           cat >> $GITHUB_STEP_SUMMARY << EOF
           
@@ -101,26 +112,32 @@ jobs:
           - **Max Age**: ${PROD_MAX_AGE_DAYS} days (2+ months)
           - **Mode**: $([ "$DRY_RUN" = "true" ] && echo "Dry Run" || echo "Live Cleanup")
           - **Filter**: Date-based tags (20* pattern)
-          - **Variants**: All image variants
+          - **Variants**: All configured variants (some may not exist)
           - **Safety**: Always keep 5 most recent images
           - **Preserved**: latest tags (always current), GPU variant tags for base images only
+          - **Status**: ${PRODUCTION_RESULT}
           
           ## Production Cleanup Actions
           See production cleanup job logs above for detailed actions performed.
+          $([ "${PRODUCTION_RESULT}" != "success" ] && echo "
+          **Note**: Some cleanup operations may have been skipped if packages don't exist yet." || echo "")
           
           ## Summary
-          - **Staging Images**: Cleaned up staging-* tags older than ${STAGING_MAX_AGE_DAYS} days
-          - **Production Images**: Cleaned up date-based tags older than ${PROD_MAX_AGE_DAYS} days
+          - **Staging Images**: Cleaned up staging-* tags older than ${STAGING_MAX_AGE_DAYS} days (${STAGING_RESULT})
+          - **Production Images**: Cleaned up date-based tags older than ${PROD_MAX_AGE_DAYS} days (${PRODUCTION_RESULT})
           - **Signature Artifacts**: Associated SHA256 signature artifacts automatically cleaned up
           - **Schedule**: Runs weekly on Sundays at 3 AM UTC
+          - **Graceful Handling**: Non-existent packages are skipped without failing the workflow
           
           $([ "$DRY_RUN" = "true" ] && echo "**Note**: This was a dry run. No images were actually deleted." || echo "**Note**: Live cleanup was performed on both staging and production images.")
           
-          ## Image Variants Cleaned
+          ## Image Variants Configured for Cleanup
           - vespera (main variant)
-          - vespera-nvidia (NVIDIA variant)
+          - vespera-nvidia (NVIDIA variant)  
           - vespera-nvidia-open (NVIDIA open-source variant)
           - vespera-dx (developer variant)
           - vespera-dx-nvidia (developer NVIDIA variant)
           - vespera-dx-nvidia-open (developer NVIDIA open-source variant)
+          
+          **Note**: Only packages that actually exist will be processed. Missing packages are gracefully skipped.
           EOF
